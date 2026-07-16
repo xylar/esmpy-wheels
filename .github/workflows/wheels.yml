@@ -29,14 +29,15 @@ jobs:
             arch: x86_64
             plat: linux_x86_64
             container: quay.io/pypa/manylinux_2_28_x86_64
-          - os: macos-13
-            kind: macos
-            arch: x86_64
-            plat: macosx_13_0_x86_64
-          - os: macos-14
-            kind: macos
-            arch: arm64
-            plat: macosx_14_0_arm64
+          # macOS re-enabled once the Linux pipeline is green (see README scope):
+          # - os: macos-13
+          #   kind: macos
+          #   arch: x86_64
+          #   plat: macosx_13_0_x86_64
+          # - os: macos-14
+          #   kind: macos
+          #   arch: arm64
+          #   plat: macosx_14_0_arm64
 
     steps:
       - uses: actions/checkout@v4
