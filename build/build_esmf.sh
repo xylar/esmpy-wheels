@@ -22,6 +22,9 @@ source "$REPO_ROOT/versions.env"
 DEPS_PREFIX="${DEPS_PREFIX:-$REPO_ROOT/_deps}"
 export ESMF_INSTALL_PREFIX="${ESMF_INSTALL_PREFIX:-$REPO_ROOT/_esmf_install}"
 
+# Fetch the ESMF source (at the pinned ref) if it is not already present.
+bash "$REPO_ROOT/scripts/fetch_esmf.sh"
+
 # --- ESMF build configuration -------------------------------------------------
 export ESMF_DIR="$REPO_ROOT/esmf"
 export ESMF_COMM="${ESMF_COMM:-mpiuni}"

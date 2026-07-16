@@ -10,6 +10,7 @@ name: wheels
 on:
   workflow_dispatch:
   push:
+    branches: ["main"]
     tags: ["v*"]
   pull_request:
     paths: ["deps/**", "build/**", "scripts/**", ".github/workflows/**"]
@@ -39,8 +40,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive   # fetch ESMF at the pinned tag
+
+      - name: Fetch ESMF source (pinned ref)
+        run: bash scripts/fetch_esmf.sh
 
       - name: Install toolchain (macOS)
         if: matrix.kind == 'macos'
@@ -103,7 +105,9 @@ jobs:
   publish-testpypi:
     name: Publish to TestPyPI
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    # DISABLED until PyPI/TestPyPI Trusted Publishing is configured. Nothing is
+    # published yet; CI only builds and uploads wheels as workflow artifacts.
+    if: false
     runs-on: ubuntu-latest
     environment: testpypi
     permissions:

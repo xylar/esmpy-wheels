@@ -55,8 +55,8 @@ installed package and resolves the library directory relative to it, so no
 ## Layout
 
 ```
-esmf/                     ESMF source, pinned to a released tag (git submodule)
-versions.env              pinned versions (ESMF tag, HDF5, NetCDF-C/Fortran)
+versions.env              pinned ESMF ref + HDF5/NetCDF-C/Fortran versions
+esmf/                     ESMF source, fetched by scripts/fetch_esmf.sh (gitignored)
 deps/
   common.sh               shared download/build helpers for the native deps
   build_deps_linux.sh     build PIC HDF5 + NetCDF-C/Fortran (Linux/manylinux)
@@ -64,19 +64,24 @@ deps/
 build/
   build_esmf.sh           build + install ESMF into a staging prefix
 scripts/
+  fetch_esmf.sh           shallow-clone the pinned ESMF ref into ./esmf
   stage_esmf.py           collect libesmf_fullylinked + esmf.mk from the install
   graft_wheel.py          inject them into the wheel and retag py3-none-<platform>
 .github/workflows/
-  wheels.yml              matrix build -> graft -> repair -> test -> TestPyPI
+  wheels.yml              matrix build -> graft -> repair -> test (artifacts only)
 ```
+
+The ESMPy Python source comes from the ESMF ref pinned in `versions.env`, so version
+and code stay in lockstep with ESMF. That ref must contain the wheel-aware loader
+change; until it is upstream in esmf-org, it points at a fork branch.
 
 ## Building locally
 
 ```bash
-git submodule update --init            # fetch ESMF at the pinned tag
+bash scripts/fetch_esmf.sh             # shallow-clone ESMF at the pinned ref
 source versions.env
 bash deps/build_deps_linux.sh          # or build_deps_macos.sh
-bash build/build_esmf.sh
+bash build/build_esmf.sh               # (also fetches ESMF if needed)
 python -m build --wheel esmf/src/addon/esmpy --outdir dist
 python scripts/stage_esmf.py --install-prefix _esmf_install --dest dist/staged_lib
 python scripts/graft_wheel.py --wheel dist/esmpy-*-py3-none-any.whl \
