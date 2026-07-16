@@ -8,10 +8,15 @@ library (`libesmf_fullylinked`) at import time. This repository builds ESMF and 
 native dependencies, grafts them into a **relocatable, self-contained wheel**, and
 publishes it so users can `pip install esmpy` without compiling ESMF themselves.
 
-> **Status: scaffold / work in progress.** The core feasibility check (does a wheel
-> repair tool vendor a `dlopen`-only library?) is still pending — see *How it works*.
+> **Status: work in progress.** The core feasibility check — does a wheel repair
+> tool vendor a `dlopen`-only library? — is confirmed: a serial + NetCDF Linux wheel
+> builds in CI (`manylinux_2_28`) and imports with `ESMFMKFILE` unset.
 >
-> Upstream discussion: <https://github.com/conda-forge/esmpy-feedstock/issues/72>
+> Tracking:
+> - Upstream ESMF issue: <https://github.com/esmf-org/esmf/issues/256>
+>   ("Consider distributing ESMPy via PyPI", milestone v9.0.0) — the canonical
+>   home for this effort; the wheel-aware loader change is intended to land there.
+> - conda-forge discussion: <https://github.com/conda-forge/esmpy-feedstock/issues/72>
 
 ## Scope
 
