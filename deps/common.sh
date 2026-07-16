@@ -18,37 +18,38 @@ set -euo pipefail
 
 _ncpu() { (command -v nproc >/dev/null && nproc) || sysctl -n hw.ncpu || echo 2; }
 
-# fetch <url> <outfile>
-fetch() {
-  local url="$1" out="$2"
-  if [ ! -f "$out" ]; then
-    echo "==> Downloading $url"
-    curl -fSL "$url" -o "$out"
+# download_extract <url> <cache_tarball> -> echoes the extracted source dir.
+# Extracts into a fresh temp dir and returns its single top-level subdirectory, so
+# it is robust to irregular archive naming and to tarballs that list a "./" member
+# (e.g. HDF5, whose source unpacks to hdf5-1.14.4-3/).
+download_extract() {
+  local url="$1" tarball="$2"
+  if [ ! -f "$tarball" ]; then
+    echo "==> Downloading $url" >&2
+    curl -fSL "$url" -o "$tarball"
   fi
+  local d; d="$(mktemp -d "${WORK_DIR:?}/extract.XXXXXX")"
+  tar -xzf "$tarball" -C "$d"
+  local sub; sub="$(find "$d" -mindepth 1 -maxdepth 1 -type d | head -1)"
+  if [ -z "$sub" ]; then
+    echo "error: no source directory extracted from $tarball" >&2
+    return 1
+  fi
+  echo "$sub"
 }
 
 build_hdf5() {
-  local v="$HDF5_VERSION"
-  local major="${v%.*}"          # e.g. 1.14.4.3 -> 1.14.4 ; adjust series below
-  local series="${v%.*.*}"       # e.g. 1.14
-  local tarball="$WORK_DIR/hdf5-$v.tar.gz"
-  # HDF5 release URL layout: .../hdf5-<series>/hdf5-<major>/src/hdf5-<v>.tar.gz
-  fetch "https://support.hdfgroup.org/ftp/HDF5/releases/hdf5-$series/hdf5-$major/src/hdf5-$v.tar.gz" "$tarball"
-  tar -xzf "$tarball" -C "$WORK_DIR"
-  pushd "$WORK_DIR/hdf5-$v" >/dev/null
-  ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static \
-      --with-pic --enable-hl
+  local src; src="$(download_extract "$HDF5_URL" "$WORK_DIR/hdf5-$HDF5_VERSION.tar.gz")"
+  pushd "$src" >/dev/null
+  ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static --enable-hl
   make -j"$(_ncpu)"
   make install
   popd >/dev/null
 }
 
 build_netcdf_c() {
-  local v="$NETCDF_C_VERSION"
-  local tarball="$WORK_DIR/netcdf-c-$v.tar.gz"
-  fetch "https://github.com/Unidata/netcdf-c/archive/refs/tags/v$v.tar.gz" "$tarball"
-  tar -xzf "$tarball" -C "$WORK_DIR"
-  pushd "$WORK_DIR/netcdf-c-$v" >/dev/null
+  local src; src="$(download_extract "$NETCDF_C_URL" "$WORK_DIR/netcdf-c-$NETCDF_C_VERSION.tar.gz")"
+  pushd "$src" >/dev/null
   CPPFLAGS="-I$DEPS_PREFIX/include" LDFLAGS="-L$DEPS_PREFIX/lib" \
     ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static \
       --disable-dap --disable-byterange --with-pic
@@ -58,11 +59,8 @@ build_netcdf_c() {
 }
 
 build_netcdf_fortran() {
-  local v="$NETCDF_FORTRAN_VERSION"
-  local tarball="$WORK_DIR/netcdf-fortran-$v.tar.gz"
-  fetch "https://github.com/Unidata/netcdf-fortran/archive/refs/tags/v$v.tar.gz" "$tarball"
-  tar -xzf "$tarball" -C "$WORK_DIR"
-  pushd "$WORK_DIR/netcdf-fortran-$v" >/dev/null
+  local src; src="$(download_extract "$NETCDF_FORTRAN_URL" "$WORK_DIR/netcdf-fortran-$NETCDF_FORTRAN_VERSION.tar.gz")"
+  pushd "$src" >/dev/null
   CPPFLAGS="-I$DEPS_PREFIX/include" LDFLAGS="-L$DEPS_PREFIX/lib" \
     LD_LIBRARY_PATH="$DEPS_PREFIX/lib:${LD_LIBRARY_PATH:-}" \
     ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static --with-pic
