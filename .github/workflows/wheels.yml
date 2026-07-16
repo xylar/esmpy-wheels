@@ -1,0 +1,118 @@
+name: wheels
+
+# First-milestone matrix: serial (mpiuni) + NetCDF, Linux + macOS (x86_64 + arm64).
+# One py3-none-<platform> wheel per (OS, arch) because ESMPy has no extension module.
+#
+# This is a scaffold: the toolchain wiring (gfortran inside manylinux, macOS gfortran
+# via Homebrew, exact platform tags) is finalized during the Phase-0 spike. Heavy
+# builds are gated to tags / manual dispatch so pushes don't trigger multi-hour runs.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: ["deps/**", "build/**", "scripts/**", ".github/workflows/**"]
+
+jobs:
+  build:
+    name: ${{ matrix.plat }}
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            kind: linux
+            arch: x86_64
+            plat: linux_x86_64
+            container: quay.io/pypa/manylinux_2_28_x86_64
+          - os: macos-13
+            kind: macos
+            arch: x86_64
+            plat: macosx_13_0_x86_64
+          - os: macos-14
+            kind: macos
+            arch: arm64
+            plat: macosx_14_0_arm64
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # fetch ESMF at the pinned tag
+
+      - name: Install toolchain (macOS)
+        if: matrix.kind == 'macos'
+        run: |
+          brew install gcc          # provides gfortran
+          python3 -m pip install --upgrade build delocate
+
+      - name: Install toolchain (Linux / manylinux)
+        if: matrix.kind == 'linux'
+        run: |
+          # manylinux_2_28 ships gcc-toolset (incl. gfortran) + auditwheel.
+          # curl/make are present; ensure build frontend is available.
+          /opt/python/cp312-cp312/bin/python -m pip install --upgrade build auditwheel
+          echo "PYBIN=/opt/python/cp312-cp312/bin" >> "$GITHUB_ENV"
+
+      - name: Build native deps (HDF5 + NetCDF)
+        run: bash deps/build_deps_${{ matrix.kind }}.sh
+        env:
+          ARCH: ${{ matrix.arch }}
+
+      - name: Build ESMF (mpiuni + NetCDF)
+        run: bash build/build_esmf.sh
+
+      - name: Build pure ESMPy wheel
+        run: |
+          PY="${PYBIN:+$PYBIN/}python3"; PY="${PY:-python3}"
+          $PY -m build --wheel esmf/src/addon/esmpy --outdir dist
+
+      - name: Stage + graft ESMF into the wheel
+        run: |
+          PY="${PYBIN:+$PYBIN/}python3"; PY="${PY:-python3}"
+          $PY scripts/stage_esmf.py --install-prefix _esmf_install --dest dist/staged_lib
+          $PY scripts/graft_wheel.py \
+            --wheel dist/esmpy-*-py3-none-any.whl \
+            --lib-dir dist/staged_lib --plat ${{ matrix.plat }} --outdir wheelhouse
+
+      - name: Repair wheel (vendor native deps)
+        run: |
+          export LD_LIBRARY_PATH="$PWD/_deps/lib:${LD_LIBRARY_PATH:-}"
+          export DYLD_LIBRARY_PATH="$PWD/_deps/lib:${DYLD_LIBRARY_PATH:-}"
+          if [ "${{ matrix.kind }}" = "linux" ]; then
+            "$PYBIN/python" -m auditwheel repair wheelhouse/esmpy-*.whl -w wheelhouse_repaired
+          else
+            delocate-wheel -w wheelhouse_repaired -v wheelhouse/esmpy-*.whl
+          fi
+
+      - name: Smoke test (ESMFMKFILE unset)
+        run: |
+          python3 -m venv /tmp/testenv && . /tmp/testenv/bin/activate
+          pip install wheelhouse_repaired/esmpy-*.whl
+          unset ESMFMKFILE
+          python -c "import esmpy; print('esmpy', esmpy.__version__)"
+          # TODO: run esmf/src/addon/esmpy/src/esmpy/test regridding subset
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.plat }}
+          path: wheelhouse_repaired/*.whl
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write          # Trusted Publishing (OIDC); no stored token
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/

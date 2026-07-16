@@ -1,0 +1,20 @@
+# This repository is a *build harness*, not a distributable Python package.
+# It builds ESMF + native dependencies and grafts them into the ESMPy wheel that
+# is produced from the pinned `esmf/` submodule (esmf/src/addon/esmpy).
+#
+# The driver for the first milestone is a hand-rolled GitHub Actions matrix
+# (.github/workflows/wheels.yml), chosen because ESMPy has no compiled extension
+# module and therefore yields a single `py3-none-<platform>` wheel per (OS, arch)
+# rather than one per Python version -- a shape cibuildwheel does not model
+# naturally. The final driver (hand-rolled vs cibuildwheel) is a Phase-0 decision.
+#
+# The commented block below is kept as the documented cibuildwheel alternative.
+
+# [tool.cibuildwheel]
+# build = "cp312-*"                       # one Python is enough; we retag to py3-none-*
+# build-frontend = "build"
+# before-all = "bash deps/build_deps_${CIBW_PLATFORM}.sh && bash build/build_esmf.sh"
+# repair-wheel-command = ""               # we run auditwheel/delocate explicitly after grafting
+#
+# [tool.cibuildwheel.linux]
+# manylinux-x86_64-image = "manylinux_2_28"

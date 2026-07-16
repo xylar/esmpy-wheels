@@ -1,0 +1,101 @@
+# esmpy-wheels
+
+Build [PyPI](https://pypi.org/) wheels for **ESMPy**, the Python interface to the
+[Earth System Modeling Framework (ESMF)](https://earthsystemmodeling.org/).
+
+ESMPy is a thin, pure-Python `ctypes` layer that loads the compiled ESMF shared
+library (`libesmf_fullylinked`) at import time. This repository builds ESMF and its
+native dependencies, grafts them into a **relocatable, self-contained wheel**, and
+publishes it so users can `pip install esmpy` without compiling ESMF themselves.
+
+> **Status: scaffold / work in progress.** The core feasibility check (does a wheel
+> repair tool vendor a `dlopen`-only library?) is still pending — see *How it works*.
+>
+> Upstream discussion: <https://github.com/conda-forge/esmpy-feedstock/issues/72>
+
+## Scope
+
+| Axis | Supported now (first milestone) | Planned (additive) |
+|------|---------------------------------|--------------------|
+| OS   | Linux, macOS                    | + Windows          |
+| Arch | x86_64, macOS arm64             | + Linux aarch64    |
+| MPI  | serial (`mpiuni`)               | + MPICH (mpi4py ABI) |
+| I/O  | NetCDF-C + NetCDF-Fortran + HDF5 bundled | |
+
+The whole pipeline is parameterized over `(os, arch, comm)`, so each added
+platform / architecture / MPI flavor is a new CI matrix entry, not a redesign.
+
+## How it works
+
+Per `(os, arch)`, in CI:
+
+1. **Build native deps from source, PIC** — HDF5 + NetCDF-C + NetCDF-Fortran into a
+   staging prefix (`deps/build_deps_<os>.sh`). Conda binaries are *not* reused; they
+   target conda's sysroot/glibc and are not `manylinux`-compliant.
+2. **Build ESMF** into a staging prefix (`build/build_esmf.sh`, adapted from the
+   conda-forge `esmf-feedstock` recipe): `ESMF_COMM=mpiuni`, `ESMF_NETCDF=split`,
+   `ESMF_SHARED_LIB_BUILD=ON`. Produces `libesmf_fullylinked.{so,dylib}` + `esmf.mk`.
+3. **Build the plain ESMPy wheel** from `esmf/src/addon/esmpy` (pure `py3-none-any`).
+4. **Stage + graft** (`scripts/stage_esmf.py`, `scripts/graft_wheel.py`) — inject
+   `libesmf_fullylinked.*` + `esmf.mk` into `esmpy/_esmf/lib/` inside the wheel and
+   retag it. Because ESMPy has no extension module, the correct tag is
+   `py3-none-<platform>` — **one wheel per (OS, arch)**, not one per Python version.
+5. **Repair** — `auditwheel` (Linux) / `delocate` (macOS) scan the grafted
+   `libesmf_fullylinked.*` and vendor its transitive dependencies (NetCDF, HDF5,
+   libgfortran, ...) into the wheel with relocatable RPATHs.
+
+At runtime the (upstream) ESMPy loader finds the bundled `esmf.mk` next to the
+installed package and resolves the library directory relative to it, so no
+`ESMFMKFILE` env var is needed. See the loader change tracked against ESMF itself.
+
+> **Feasibility gate (Phase 0):** step 5 assumes the repair tools follow a
+> non-extension library that nothing links against at build time (ESMPy `dlopen`s it
+> by path). This must be confirmed before investing further.
+
+## Layout
+
+```
+esmf/                     ESMF source, pinned to a released tag (git submodule)
+versions.env              pinned versions (ESMF tag, HDF5, NetCDF-C/Fortran)
+deps/
+  common.sh               shared download/build helpers for the native deps
+  build_deps_linux.sh     build PIC HDF5 + NetCDF-C/Fortran (Linux/manylinux)
+  build_deps_macos.sh     same for macOS (x86_64 + arm64)
+build/
+  build_esmf.sh           build + install ESMF into a staging prefix
+scripts/
+  stage_esmf.py           collect libesmf_fullylinked + esmf.mk from the install
+  graft_wheel.py          inject them into the wheel and retag py3-none-<platform>
+.github/workflows/
+  wheels.yml              matrix build -> graft -> repair -> test -> TestPyPI
+```
+
+## Building locally
+
+```bash
+git submodule update --init            # fetch ESMF at the pinned tag
+source versions.env
+bash deps/build_deps_linux.sh          # or build_deps_macos.sh
+bash build/build_esmf.sh
+python -m build --wheel esmf/src/addon/esmpy --outdir dist
+python scripts/stage_esmf.py --install-prefix _esmf_install --dest dist/staged_lib
+python scripts/graft_wheel.py --wheel dist/esmpy-*-py3-none-any.whl \
+    --lib-dir dist/staged_lib --plat linux_x86_64 --outdir wheelhouse
+auditwheel repair wheelhouse/esmpy-*.whl -w wheelhouse   # delocate-wheel on macOS
+```
+
+## Relationship to conda-forge
+
+The conda-forge `esmf-feedstock` / `esmpy-feedstock` are the recipe/dependency
+**blueprint** for this repo (build flags, dependency versions, `esmf.mk` path
+handling). Their *binaries* are not reused — manylinux wheels rebuild the native
+stack from source. This repo intentionally mirrors the feedstock split: ESMF (the
+native library) and ESMPy (the Python layer) are built here as one self-contained
+wheel rather than two conda packages.
+
+## License
+
+ESMF and ESMPy are licensed under the University of Illinois/NCSA Open Source
+License (see [`LICENSE`](LICENSE)). Wheels built here redistribute ESMF — and the
+bundled NetCDF, HDF5, and compiler runtime libraries — in binary form under their
+respective licenses.

@@ -1,0 +1,7 @@
+[submodule "esmf"]
+	path = esmf
+	url = https://github.com/esmf-org/esmf.git
+	# Pinned to a released ESMF tag via `git -C esmf checkout <tag>`.
+	# The tag is recorded here as the submodule commit and mirrored in versions.env
+	# (ESMF_TAG). The wheel version is derived from the ESMF source, so the pinned
+	# tag determines the published version.

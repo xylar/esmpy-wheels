@@ -1,0 +1,20 @@
+# Build/staging outputs (never committed)
+/_deps/
+/_esmf_install/
+/build/work/
+/dist/
+/wheelhouse/
+*.whl
+*.tar.gz
+*.tar.bz2
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Editor / OS
+.DS_Store
+*.swp
