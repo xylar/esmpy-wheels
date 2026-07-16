@@ -16,6 +16,11 @@ on:
   pull_request:
     paths: ["deps/**", "build/**", "scripts/**", ".github/workflows/**"]
 
+# Supersede an in-progress run on the same ref instead of piling up.
+concurrency:
+  group: wheels-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: ${{ matrix.plat }}
@@ -30,14 +35,18 @@ jobs:
             arch: x86_64
             plat: linux_x86_64
             container: quay.io/pypa/manylinux_2_28_x86_64
-          - os: macos-13
-            kind: macos
-            arch: x86_64
-            plat: macosx_13_0_x86_64
           - os: macos-14
             kind: macos
             arch: arm64
             plat: macosx_14_0_arm64
+          # Intel macOS (osx-64) is deferred: GitHub's macos-13 runners are being
+          # deprecated and are chronically queued, and gfortran can't cross-compile
+          # x86_64 from arm64, so it needs a real (scarce) Intel runner. Re-add if
+          # demand justifies a paid/self-hosted x86_64 macOS runner.
+          # - os: macos-13
+          #   kind: macos
+          #   arch: x86_64
+          #   plat: macosx_13_0_x86_64
 
     steps:
       - uses: actions/checkout@v4

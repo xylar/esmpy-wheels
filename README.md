@@ -22,10 +22,13 @@ publishes it so users can `pip install esmpy` without compiling ESMF themselves.
 
 | Axis | Supported now (first milestone) | Planned (additive) |
 |------|---------------------------------|--------------------|
-| OS   | Linux, macOS                    | + Windows          |
-| Arch | x86_64, macOS arm64             | + Linux aarch64    |
+| OS / arch | Linux x86_64 (manylinux_2_28), macOS arm64 | + Linux aarch64, + Intel macOS, + Windows |
 | MPI  | serial (`mpiuni`)               | + MPICH (mpi4py ABI) |
 | I/O  | NetCDF-C + NetCDF-Fortran + HDF5 bundled | |
+
+Intel macOS (osx-64) is intentionally deferred (see the CI matrix note): GitHub's
+Intel runners are being deprecated and gfortran can't cross-compile x86_64 from
+arm64. It can be re-added if demand justifies a paid/self-hosted Intel runner.
 
 The whole pipeline is parameterized over `(os, arch, comm)`, so each added
 platform / architecture / MPI flavor is a new CI matrix entry, not a redesign.
