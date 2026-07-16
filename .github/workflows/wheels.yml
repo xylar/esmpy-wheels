@@ -29,15 +29,14 @@ jobs:
             arch: x86_64
             plat: linux_x86_64
             container: quay.io/pypa/manylinux_2_28_x86_64
-          # macOS re-enabled once the Linux pipeline is green (see README scope):
-          # - os: macos-13
-          #   kind: macos
-          #   arch: x86_64
-          #   plat: macosx_13_0_x86_64
-          # - os: macos-14
-          #   kind: macos
-          #   arch: arm64
-          #   plat: macosx_14_0_arm64
+          - os: macos-13
+            kind: macos
+            arch: x86_64
+            plat: macosx_13_0_x86_64
+          - os: macos-14
+            kind: macos
+            arch: arm64
+            plat: macosx_14_0_arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -45,11 +44,26 @@ jobs:
       - name: Fetch ESMF source (pinned ref)
         run: bash scripts/fetch_esmf.sh
 
+      - name: Set up Python (macOS)
+        if: matrix.kind == 'macos'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install toolchain (macOS)
         if: matrix.kind == 'macos'
         run: |
-          brew install gcc          # provides gfortran
-          python3 -m pip install --upgrade build delocate
+          brew install gcc          # provides gfortran-NN
+          # Ensure a plain `gfortran` is on PATH (ESMF's gfortranclang build needs it).
+          GCCBIN="$(brew --prefix gcc)/bin"
+          if ! command -v gfortran >/dev/null 2>&1; then
+            GF="$(ls "$GCCBIN"/gfortran-* 2>/dev/null | sort -V | tail -1)"
+            [ -n "$GF" ] && ln -sf "$GF" "$GCCBIN/gfortran"
+          fi
+          echo "$GCCBIN" >> "$GITHUB_PATH"
+          # setup-python's interpreter is not externally-managed (no PEP 668 wall).
+          python -m pip install --upgrade build delocate
+          echo "PYBIN=$(dirname "$(command -v python)")" >> "$GITHUB_ENV"
 
       - name: Install toolchain (Linux / manylinux)
         if: matrix.kind == 'linux'
@@ -87,7 +101,7 @@ jobs:
           if [ "${{ matrix.kind }}" = "linux" ]; then
             "$PYBIN/python" -m auditwheel repair wheelhouse/esmpy-*.whl -w wheelhouse_repaired
           else
-            delocate-wheel -w wheelhouse_repaired -v wheelhouse/esmpy-*.whl
+            "$PYBIN/delocate-wheel" -w wheelhouse_repaired -v wheelhouse/esmpy-*.whl
           fi
 
       - name: Smoke test (ESMFMKFILE unset)
