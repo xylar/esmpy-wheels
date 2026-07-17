@@ -1,11 +1,17 @@
 name: wheels
 
-# First-milestone matrix: serial (mpiuni) + NetCDF, Linux + macOS (x86_64 + arm64).
+# First-milestone matrix: serial (mpiuni) + NetCDF, Linux + macOS + Windows.
 # One py3-none-<platform> wheel per (OS, arch) because ESMPy has no extension module.
 #
 # This is a scaffold: the toolchain wiring (gfortran inside manylinux, macOS gfortran
-# via Homebrew, exact platform tags) is finalized during the Phase-0 spike. Heavy
-# builds are gated to tags / manual dispatch so pushes don't trigger multi-hour runs.
+# via Homebrew, MinGW-w64 via MSYS2 on Windows, exact platform tags) is finalized
+# during the Phase-0 spike. Heavy builds are gated to tags / manual dispatch so pushes
+# don't trigger multi-hour runs.
+#
+# Windows is currently a Phase-0 spike: native deps (HDF5 + NetCDF) come from MSYS2
+# pacman packages to isolate the feasibility question -- does ESMF build a shared
+# libesmf_fullylinked.dll under MinGW? Once proven, the deps switch to a from-source
+# build (deps/build_deps_windows.sh) for version pinning + a trimmed DLL closure.
 
 on:
   workflow_dispatch:
@@ -35,10 +41,20 @@ jobs:
             arch: x86_64
             plat: linux_x86_64
             container: quay.io/pypa/manylinux_2_28_x86_64
+            shell: bash
           - os: macos-14
             kind: macos
             arch: arm64
             plat: macosx_14_0_arm64
+            shell: bash
+          - os: windows-latest
+            kind: windows
+            arch: amd64
+            plat: win_amd64
+            # Every run: step below executes in the MSYS2 MINGW64 shell.
+            shell: 'msys2 {0}'
+            # Phase-0 spike: native deps come from MSYS2 (/mingw64), not a source build.
+            deps_prefix: /mingw64
           # Intel macOS (osx-64) is deferred: GitHub's macos-13 runners are being
           # deprecated and are chronically queued, and gfortran can't cross-compile
           # x86_64 from arm64, so it needs a real (scarce) Intel runner. Re-add if
@@ -47,11 +63,31 @@ jobs:
           #   kind: macos
           #   arch: x86_64
           #   plat: macosx_13_0_x86_64
+          #   shell: bash
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up MSYS2 / MinGW-w64 (Windows)
+        if: matrix.kind == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          release: false
+          install: >-
+            git
+            make
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-gcc-fortran
+            mingw-w64-x86_64-hdf5
+            mingw-w64-x86_64-netcdf
+            mingw-w64-x86_64-netcdf-fortran
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-python-pip
+
       - name: Fetch ESMF source (pinned ref)
+        shell: ${{ matrix.shell }}
         run: bash scripts/fetch_esmf.sh
 
       - name: Set up Python (macOS)
@@ -62,6 +98,7 @@ jobs:
 
       - name: Install toolchain (macOS)
         if: matrix.kind == 'macos'
+        shell: ${{ matrix.shell }}
         run: |
           brew install gcc          # provides gfortran-NN
           # Ensure a plain `gfortran` is on PATH (ESMF's gfortranclang build needs it).
@@ -77,26 +114,44 @@ jobs:
 
       - name: Install toolchain (Linux / manylinux)
         if: matrix.kind == 'linux'
+        shell: ${{ matrix.shell }}
         run: |
           # manylinux_2_28 ships gcc-toolset (incl. gfortran) + auditwheel.
           # curl/make are present; ensure build frontend is available.
           /opt/python/cp312-cp312/bin/python -m pip install --upgrade build auditwheel
           echo "PYBIN=/opt/python/cp312-cp312/bin" >> "$GITHUB_ENV"
 
+      - name: Install toolchain (Windows / MinGW)
+        if: matrix.kind == 'windows'
+        shell: ${{ matrix.shell }}
+        run: |
+          # MSYS2 python is not externally-managed; delvewheel is the Windows analog
+          # of auditwheel/delocate. `python3` is provided by mingw-w64-python.
+          python -m pip install --upgrade build delvewheel
+          echo "PYBIN=$(dirname "$(command -v python)")" >> "$GITHUB_ENV"
+
       - name: Build native deps (HDF5 + NetCDF)
+        # Windows Phase-0 spike sources HDF5/NetCDF from MSYS2 (/mingw64) instead.
+        if: matrix.kind != 'windows'
+        shell: ${{ matrix.shell }}
         run: bash deps/build_deps_${{ matrix.kind }}.sh
         env:
           ARCH: ${{ matrix.arch }}
 
       - name: Build ESMF (mpiuni + NetCDF)
+        shell: ${{ matrix.shell }}
         run: bash build/build_esmf.sh
+        env:
+          DEPS_PREFIX: ${{ matrix.deps_prefix }}
 
       - name: Build pure ESMPy wheel
+        shell: ${{ matrix.shell }}
         run: |
           PY="${PYBIN:+$PYBIN/}python3"; PY="${PY:-python3}"
           $PY -m build --wheel esmf/src/addon/esmpy --outdir dist
 
       - name: Stage + graft ESMF into the wheel
+        shell: ${{ matrix.shell }}
         run: |
           PY="${PYBIN:+$PYBIN/}python3"; PY="${PY:-python3}"
           $PY scripts/stage_esmf.py --install-prefix _esmf_install --dest dist/staged_lib
@@ -105,18 +160,33 @@ jobs:
             --lib-dir dist/staged_lib --plat ${{ matrix.plat }} --outdir wheelhouse
 
       - name: Repair wheel (vendor native deps)
+        shell: ${{ matrix.shell }}
+        env:
+          DEPS_PREFIX: ${{ matrix.deps_prefix }}
         run: |
-          export LD_LIBRARY_PATH="$PWD/_deps/lib:${LD_LIBRARY_PATH:-}"
-          export DYLD_LIBRARY_PATH="$PWD/_deps/lib:${DYLD_LIBRARY_PATH:-}"
           if [ "${{ matrix.kind }}" = "linux" ]; then
+            export LD_LIBRARY_PATH="$PWD/_deps/lib:${LD_LIBRARY_PATH:-}"
             "$PYBIN/python" -m auditwheel repair wheelhouse/esmpy-*.whl -w wheelhouse_repaired
-          else
+          elif [ "${{ matrix.kind }}" = "macos" ]; then
+            export DYLD_LIBRARY_PATH="$PWD/_deps/lib:${DYLD_LIBRARY_PATH:-}"
             "$PYBIN/delocate-wheel" -w wheelhouse_repaired -v wheelhouse/esmpy-*.whl
+          else
+            # Windows: delvewheel vendors dependent DLLs from the deps bin dir. The
+            # library is dlopen'd by path, so --add-path points at the DLL closure.
+            DEPS="${DEPS_PREFIX:-/mingw64}"
+            python -m delvewheel repair \
+              --add-path "$DEPS/bin" \
+              -w wheelhouse_repaired wheelhouse/esmpy-*.whl
           fi
 
       - name: Smoke test (ESMFMKFILE unset)
+        shell: ${{ matrix.shell }}
         run: |
-          python3 -m venv /tmp/testenv && . /tmp/testenv/bin/activate
+          if [ "${{ matrix.kind }}" = "windows" ]; then
+            python3 -m venv "$PWD/testenv" && . "$PWD/testenv/Scripts/activate"
+          else
+            python3 -m venv /tmp/testenv && . /tmp/testenv/bin/activate
+          fi
           pip install wheelhouse_repaired/esmpy-*.whl
           unset ESMFMKFILE
           python -c "import esmpy; print('esmpy', esmpy.__version__)"

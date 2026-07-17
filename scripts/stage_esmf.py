@@ -26,6 +26,31 @@ def find_esmf_mk(install_prefix: Path) -> Path:
     return matches[0]
 
 
+# Import/static/libtool artifacts that share the libesmf_fullylinked stem but are not
+# the runtime object we want to graft. On Windows the shared build emits both
+# libesmf_fullylinked.dll (runtime) and libesmf_fullylinked.dll.a (import lib); we
+# stage only the former. On Linux/macOS there is nothing to filter.
+_NON_RUNTIME_SUFFIXES = (".a", ".lib", ".la", ".exp", ".def")
+
+
+def find_runtime_libs(libsdir: str) -> list[Path]:
+    """Locate the runtime libesmf_fullylinked object(s).
+
+    Searches ``libsdir`` (ESMF_LIBSDIR from esmf.mk) and, as a fallback, the sibling
+    ``bin/`` directory -- on Windows the .dll installs to bin/ while the import lib
+    lands in lib/. Import/static libs are filtered out so only the loadable object
+    (.so/.dylib/.dll) is returned.
+    """
+    lib_dir = Path(libsdir)
+    search_dirs = [lib_dir, lib_dir.parent / "bin"]
+    for d in search_dirs:
+        libs = [p for p in sorted(d.glob("libesmf_fullylinked.*"))
+                if p.suffix not in _NON_RUNTIME_SUFFIXES]
+        if libs:
+            return libs
+    return []
+
+
 def read_mk_var(esmf_mk: Path, key: str) -> str | None:
     for line in esmf_mk.read_text().splitlines():
         stripped = line.strip()
@@ -52,9 +77,10 @@ def main() -> None:
         sys.exit(f"error: ESMF_LIBSDIR not found in {esmf_mk}")
 
     lib_dir = Path(libsdir)
-    libs = sorted(lib_dir.glob("libesmf_fullylinked.*"))
+    libs = find_runtime_libs(libsdir)
     if not libs:
-        sys.exit(f"error: no libesmf_fullylinked.* found in {lib_dir}")
+        sys.exit(f"error: no runtime libesmf_fullylinked.* found in {lib_dir} "
+                 f"or its sibling bin/")
 
     args.dest.mkdir(parents=True, exist_ok=True)
     shutil.copy2(esmf_mk, args.dest / "esmf.mk")
