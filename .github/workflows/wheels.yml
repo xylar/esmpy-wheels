@@ -32,6 +32,12 @@ jobs:
     name: ${{ matrix.plat }}
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
+    # matrix.shell is bash on Linux/macOS and 'msys2 {0}' on Windows. The matrix
+    # context is available in defaults.run.shell (but NOT in a step's own shell: key),
+    # so all run: steps below inherit the right shell per platform.
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     strategy:
       fail-fast: false
       matrix:
@@ -87,7 +93,6 @@ jobs:
             mingw-w64-x86_64-python-pip
 
       - name: Fetch ESMF source (pinned ref)
-        shell: ${{ matrix.shell }}
         run: bash scripts/fetch_esmf.sh
 
       - name: Set up Python (macOS)
@@ -98,7 +103,6 @@ jobs:
 
       - name: Install toolchain (macOS)
         if: matrix.kind == 'macos'
-        shell: ${{ matrix.shell }}
         run: |
           brew install gcc          # provides gfortran-NN
           # Ensure a plain `gfortran` is on PATH (ESMF's gfortranclang build needs it).
@@ -114,7 +118,6 @@ jobs:
 
       - name: Install toolchain (Linux / manylinux)
         if: matrix.kind == 'linux'
-        shell: ${{ matrix.shell }}
         run: |
           # manylinux_2_28 ships gcc-toolset (incl. gfortran) + auditwheel.
           # curl/make are present; ensure build frontend is available.
@@ -123,7 +126,6 @@ jobs:
 
       - name: Install toolchain (Windows / MinGW)
         if: matrix.kind == 'windows'
-        shell: ${{ matrix.shell }}
         run: |
           # MSYS2 python is not externally-managed; delvewheel is the Windows analog
           # of auditwheel/delocate. `python3` is provided by mingw-w64-python.
@@ -133,25 +135,21 @@ jobs:
       - name: Build native deps (HDF5 + NetCDF)
         # Windows Phase-0 spike sources HDF5/NetCDF from MSYS2 (/mingw64) instead.
         if: matrix.kind != 'windows'
-        shell: ${{ matrix.shell }}
         run: bash deps/build_deps_${{ matrix.kind }}.sh
         env:
           ARCH: ${{ matrix.arch }}
 
       - name: Build ESMF (mpiuni + NetCDF)
-        shell: ${{ matrix.shell }}
         run: bash build/build_esmf.sh
         env:
           DEPS_PREFIX: ${{ matrix.deps_prefix }}
 
       - name: Build pure ESMPy wheel
-        shell: ${{ matrix.shell }}
         run: |
           PY="${PYBIN:+$PYBIN/}python3"; PY="${PY:-python3}"
           $PY -m build --wheel esmf/src/addon/esmpy --outdir dist
 
       - name: Stage + graft ESMF into the wheel
-        shell: ${{ matrix.shell }}
         run: |
           PY="${PYBIN:+$PYBIN/}python3"; PY="${PY:-python3}"
           $PY scripts/stage_esmf.py --install-prefix _esmf_install --dest dist/staged_lib
@@ -160,7 +158,6 @@ jobs:
             --lib-dir dist/staged_lib --plat ${{ matrix.plat }} --outdir wheelhouse
 
       - name: Repair wheel (vendor native deps)
-        shell: ${{ matrix.shell }}
         env:
           DEPS_PREFIX: ${{ matrix.deps_prefix }}
         run: |
@@ -180,7 +177,6 @@ jobs:
           fi
 
       - name: Smoke test (ESMFMKFILE unset)
-        shell: ${{ matrix.shell }}
         run: |
           if [ "${{ matrix.kind }}" = "windows" ]; then
             python3 -m venv "$PWD/testenv" && . "$PWD/testenv/Scripts/activate"
