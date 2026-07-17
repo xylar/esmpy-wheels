@@ -42,11 +42,8 @@ case "$(uname -s)" in
     export ESMF_OS="${ESMF_OS:-MinGW}"
     export ESMF_COMPILER="${ESMF_COMPILER:-gfortran}"
     export ESMF_ABI="${ESMF_ABI:-64}"
-    # ESMF's MinGW build_rules.mk only accepts ESMF_MACHINE=i686 (a legacy label)
-    # and selects 32- vs 64-bit purely from ESMF_ABI. Auto-detection sets it to
-    # `uname -m` (x86_64) which the config rejects, so pin it. i686 + ABI=64 maps
-    # to the x86_64_small model -- a real 64-bit build with the mingw-w64 toolchain.
-    export ESMF_MACHINE="${ESMF_MACHINE:-i686}"
+    # ESMF_MACHINE auto-detects to `uname -m` (x86_64); the pinned ESMF ref accepts
+    # that in its MinGW build_rules.mk (older ESMF only recognized the i686 label).
     ;;
   *)
     export ESMF_COMPILER="${ESMF_COMPILER:-gfortran}"
