@@ -171,26 +171,47 @@ jobs:
             # Windows: delvewheel vendors dependent DLLs from the deps bin dir. The
             # library is dlopen'd by path, so --add-path points at the DLL closure.
             DEPS="${DEPS_PREFIX:-/mingw64}"
-            python -m delvewheel repair \
+            # --analyze-existing is essential here: esmpy ships NO .pyd extension
+            # module, so delvewheel's default (root the dep graph at extension
+            # modules) finds nothing and vendors nothing. This flag makes it treat
+            # the grafted libesmf_fullylinked.dll -- already in the wheel -- as a
+            # root, so its DLL closure (libgfortran/netcdf/hdf5/...) gets vendored.
+            # -v lists exactly what is analyzed + vendored in the log.
+            python -m delvewheel repair -v --analyze-existing \
               --add-path "$DEPS/bin" \
               -w wheelhouse_repaired wheelhouse/esmpy-*.whl
           fi
 
       - name: Smoke test (ESMFMKFILE unset)
+        if: matrix.kind != 'windows'
         run: |
-          python3 -m venv "$PWD/testenv"
-          # venv bin dir differs by platform/toolchain: POSIX (incl. MSYS2 MinGW
-          # python) uses bin/, native-Windows CPython uses Scripts/. Call the venv
-          # interpreter by path instead of sourcing activate (which is what varies).
-          if [ -x "$PWD/testenv/bin/python" ]; then
-            VPY="$PWD/testenv/bin/python"
-          else
-            VPY="$PWD/testenv/Scripts/python"
-          fi
-          "$VPY" -m pip install wheelhouse_repaired/esmpy-*.whl
+          python3 -m venv /tmp/testenv && . /tmp/testenv/bin/activate
+          pip install wheelhouse_repaired/esmpy-*.whl
           unset ESMFMKFILE
-          "$VPY" -c "import esmpy; print('esmpy', esmpy.__version__)"
+          python -c "import esmpy; print('esmpy', esmpy.__version__)"
           # TODO: run esmf/src/addon/esmpy/src/esmpy/test regridding subset
+
+      # Windows: validate the win_amd64 wheel under a real python.org CPython (not the
+      # MSYS2 MinGW python, whose platform tag is mingw_x86_64 -> pip rejects our
+      # win_amd64 wheel). The hosted CPython has no /mingw64/bin on PATH, so a
+      # successful import proves the wheel's native-DLL closure is self-contained.
+      - name: Set up Python (Windows smoke test)
+        if: matrix.kind == 'windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Smoke test (Windows, native CPython)
+        if: matrix.kind == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m venv testenv
+          $py = "testenv\Scripts\python.exe"
+          $whl = (Get-ChildItem wheelhouse_repaired\esmpy-*.whl | Select-Object -First 1).FullName
+          & $py -m pip install "$whl"
+          Remove-Item Env:ESMFMKFILE -ErrorAction SilentlyContinue
+          & $py -c "import esmpy; print('esmpy', esmpy.__version__)"
 
       - uses: actions/upload-artifact@v4
         with:
