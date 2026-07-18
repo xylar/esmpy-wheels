@@ -41,7 +41,12 @@ download_extract() {
 build_hdf5() {
   local src; src="$(download_extract "$HDF5_URL" "$WORK_DIR/hdf5-$HDF5_VERSION.tar.gz")"
   pushd "$src" >/dev/null
-  ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static --enable-hl
+  # HDF5_CONFIGURE_EXTRA lets a per-OS wrapper pass extra ./configure flags. Windows
+  # uses it to disable the _Float16 feature: MinGW's gcc advertises the _Float16 type
+  # (so HDF5's configure enables the float16 conversions) but MinGW's <float.h> lacks
+  # the FLT16_MAX macro those functions need -> H5Tconv.c fails to compile.
+  ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static --enable-hl \
+    ${HDF5_CONFIGURE_EXTRA:-}
   make -j"$(_ncpu)"
   make install
   popd >/dev/null
@@ -50,9 +55,16 @@ build_hdf5() {
 build_netcdf_c() {
   local src; src="$(download_extract "$NETCDF_C_URL" "$WORK_DIR/netcdf-c-$NETCDF_C_VERSION.tar.gz")"
   pushd "$src" >/dev/null
-  CPPFLAGS="-I$DEPS_PREFIX/include" LDFLAGS="-L$DEPS_PREFIX/lib" \
+  # Append the caller's CPPFLAGS/LDFLAGS (Windows passes -Wl,--export-all-symbols
+  # here; Linux/macOS pass their -rpath) so per-OS wrappers can influence the link.
+  # NETCDF_C_CONFIGURE_EXTRA lets a per-OS wrapper pass extra ./configure flags.
+  # Windows uses it to --disable-filter-testing (netcdf-c's loadable HDF5/Zarr filter
+  # plugin modules have deliberately-undefined symbols and can't be built shared
+  # under MinGW; nothing in ESMF needs them).
+  CPPFLAGS="-I$DEPS_PREFIX/include ${CPPFLAGS:-}" LDFLAGS="-L$DEPS_PREFIX/lib ${LDFLAGS:-}" \
     ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static \
-      --disable-dap --disable-byterange --with-pic
+      --disable-dap --disable-byterange --with-pic \
+      ${NETCDF_C_CONFIGURE_EXTRA:-}
   make -j"$(_ncpu)"
   make install
   popd >/dev/null
@@ -61,10 +73,20 @@ build_netcdf_c() {
 build_netcdf_fortran() {
   local src; src="$(download_extract "$NETCDF_FORTRAN_URL" "$WORK_DIR/netcdf-fortran-$NETCDF_FORTRAN_VERSION.tar.gz")"
   pushd "$src" >/dev/null
-  CPPFLAGS="-I$DEPS_PREFIX/include" LDFLAGS="-L$DEPS_PREFIX/lib" \
+  CPPFLAGS="-I$DEPS_PREFIX/include ${CPPFLAGS:-}" LDFLAGS="-L$DEPS_PREFIX/lib ${LDFLAGS:-}" \
     LD_LIBRARY_PATH="$DEPS_PREFIX/lib:${LD_LIBRARY_PATH:-}" \
     ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static --with-pic
-  make -j"$(_ncpu)"
+  # NETCDF_FORTRAN_MAKE_LDFLAGS: extra link flags applied only at build time, NOT
+  # during ./configure's compiler probes. Windows needs libtool's -no-undefined to
+  # build libnetcdff.dll (netcdf-fortran 4.5.4 lacks the MinGW handling netcdf-c
+  # has), but -no-undefined is a libtool token that plain gcc rejects, so it must
+  # not leak into configure's link tests. Overriding LDFLAGS at `make` re-supplies
+  # the configure-time flags plus the build-only ones.
+  if [ -n "${NETCDF_FORTRAN_MAKE_LDFLAGS:-}" ]; then
+    make -j"$(_ncpu)" LDFLAGS="-L$DEPS_PREFIX/lib ${LDFLAGS:-} $NETCDF_FORTRAN_MAKE_LDFLAGS"
+  else
+    make -j"$(_ncpu)"
+  fi
   make install
   popd >/dev/null
 }
