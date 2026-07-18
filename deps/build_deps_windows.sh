@@ -28,6 +28,12 @@ export FC="${FC:-gfortran}"
 export CFLAGS="${CFLAGS:-}"
 export FFLAGS="${FFLAGS:-} -fallow-argument-mismatch"
 
+# Disable HDF5's _Float16 conversions on MinGW: gcc advertises the _Float16 type but
+# MinGW's <float.h> does not define FLT16_MAX, so those H5Tconv.c functions fail to
+# compile. Nothing in the ESMF/NetCDF stack uses HDF5 float16 (MSYS2's own HDF5
+# package disables it too).
+export HDF5_CONFIGURE_EXTRA="--enable-nonstandard-feature-float16=no"
+
 # shellcheck source=deps/common.sh
 source "$SCRIPT_DIR/common.sh"
 build_all_deps

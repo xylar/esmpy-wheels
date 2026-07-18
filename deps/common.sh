@@ -41,7 +41,12 @@ download_extract() {
 build_hdf5() {
   local src; src="$(download_extract "$HDF5_URL" "$WORK_DIR/hdf5-$HDF5_VERSION.tar.gz")"
   pushd "$src" >/dev/null
-  ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static --enable-hl
+  # HDF5_CONFIGURE_EXTRA lets a per-OS wrapper pass extra ./configure flags. Windows
+  # uses it to disable the _Float16 feature: MinGW's gcc advertises the _Float16 type
+  # (so HDF5's configure enables the float16 conversions) but MinGW's <float.h> lacks
+  # the FLT16_MAX macro those functions need -> H5Tconv.c fails to compile.
+  ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static --enable-hl \
+    ${HDF5_CONFIGURE_EXTRA:-}
   make -j"$(_ncpu)"
   make install
   popd >/dev/null
