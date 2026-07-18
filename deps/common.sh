@@ -38,6 +38,25 @@ download_extract() {
   echo "$sub"
 }
 
+build_mpich() {
+  local src; src="$(download_extract "$MPICH_URL" "$WORK_DIR/mpich-$MPICH_VERSION.tar.gz")"
+  pushd "$src" >/dev/null
+  # Build the full MPICH (C + C++ + Fortran wrappers): ESMF's mpich build_rules
+  # compile with mpif90/mpicxx (ESMF_F90DEFAULT/ESMF_CXXDEFAULT), so those wrappers
+  # -- and the C libmpi ESMF ultimately links -- must come from here. The install
+  # lands in $DEPS_PREFIX/{bin,lib}; build_esmf.sh puts $DEPS_PREFIX/bin on PATH so
+  # ESMF picks up these wrappers.
+  #
+  # gfortran >= 10 needs -fallow-argument-mismatch for MPICH's F77 bindings; the
+  # caller's FFLAGS carries it, but also pass FCFLAGS since MPICH uses it for F90.
+  CXX="${CXX:-g++}" FCFLAGS="${FCFLAGS:-$FFLAGS}" \
+    ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static \
+      --enable-fortran=all --enable-cxx
+  make -j"$(_ncpu)"
+  make install
+  popd >/dev/null
+}
+
 build_hdf5() {
   local src; src="$(download_extract "$HDF5_URL" "$WORK_DIR/hdf5-$HDF5_VERSION.tar.gz")"
   pushd "$src" >/dev/null
@@ -93,6 +112,15 @@ build_netcdf_fortran() {
 
 build_all_deps() {
   mkdir -p "$DEPS_PREFIX" "$WORK_DIR"
+  # MPI variant: build the MPI implementation before the NetCDF stack. Keyed off
+  # ESMF_COMM so a future openmpi variant just adds a case here. Serial (mpiuni)
+  # builds none. NetCDF-C/Fortran stay serial regardless -- they build with the
+  # plain CC/FC the wrapper exports (gcc/gfortran), not the MPI compiler wrappers.
+  case "${ESMF_COMM:-mpiuni}" in
+    mpich) build_mpich ;;
+    mpiuni) ;;
+    *) echo "error: unsupported ESMF_COMM='$ESMF_COMM' for deps build" >&2; return 1 ;;
+  esac
   build_hdf5
   build_netcdf_c
   build_netcdf_fortran

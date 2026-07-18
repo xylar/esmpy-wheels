@@ -59,12 +59,12 @@ export ESMF_NETCDF_INCLUDE="$DEPS_PREFIX/include"
 export ESMF_NETCDF_LIBPATH="$DEPS_PREFIX/lib"
 export ESMF_NETCDF_LIBS="-lnetcdff -lnetcdf"
 
-# PIO requires MPI; disable it for the serial (mpiuni) milestone.
-if [ "$ESMF_COMM" = "mpiuni" ]; then
-  export ESMF_PIO=OFF
-else
-  export ESMF_PIO=internal
-fi
+# Keep PIO OFF for every variant, including MPI. ESMPy does not need PIO, and PIO
+# is Fortran that calls MPI via mpif.h -- enabling it would pull the MPI *Fortran*
+# bindings into libesmf_fullylinked. Keeping it off means the shared library's only
+# MPI dependency is the C libmpi, which the PyPI `mpich` runtime wheel provides (it
+# ships no Fortran bindings). See the ESMF-fork loadESMF.py libmpi preload.
+export ESMF_PIO=OFF
 
 # Internal LAPACK/MOAB/YAMLCPP (defaults) -> no extra external deps to bundle.
 
@@ -75,6 +75,13 @@ export DYLD_LIBRARY_PATH="$DEPS_PREFIX/lib:${DYLD_LIBRARY_PATH:-}"
 case "$(uname -s)" in
   MINGW*|MSYS*) export PATH="$DEPS_PREFIX/bin:$DEPS_PREFIX/lib:$PATH" ;;
 esac
+
+# MPI variant: ESMF's mpich build_rules invoke mpif90/mpicxx (ESMF_F90DEFAULT/
+# ESMF_CXXDEFAULT). Put the source-built MPICH's bin dir on PATH so those wrappers
+# resolve to our deps prefix rather than any system MPI. (mpiuni needs no wrappers.)
+if [ "$ESMF_COMM" != "mpiuni" ]; then
+  export PATH="$DEPS_PREFIX/bin:$PATH"
+fi
 
 # --- Build --------------------------------------------------------------------
 NPROC="$( (command -v nproc >/dev/null && nproc) || sysctl -n hw.ncpu || echo 2)"
