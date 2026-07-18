@@ -8,10 +8,10 @@ name: wheels
 # during the Phase-0 spike. Heavy builds are gated to tags / manual dispatch so pushes
 # don't trigger multi-hour runs.
 #
-# Windows is currently a Phase-0 spike: native deps (HDF5 + NetCDF) come from MSYS2
-# pacman packages to isolate the feasibility question -- does ESMF build a shared
-# libesmf_fullylinked.dll under MinGW? Once proven, the deps switch to a from-source
-# build (deps/build_deps_windows.sh) for version pinning + a trimmed DLL closure.
+# All three platforms now build HDF5 + NetCDF-C + NetCDF-Fortran from source at the
+# versions pinned in versions.env (deps/build_deps_<kind>.sh). MSYS2 still provides
+# the MinGW toolchain (gcc/gfortran/python) and zlib on Windows, but the pinned deps
+# are no longer taken from pacman.
 
 on:
   workflow_dispatch:
@@ -59,8 +59,6 @@ jobs:
             plat: win_amd64
             # Every run: step below executes in the MSYS2 MINGW64 shell.
             shell: 'msys2 {0}'
-            # Phase-0 spike: native deps come from MSYS2 (/mingw64), not a source build.
-            deps_prefix: /mingw64
           # Intel macOS (osx-64) is deferred: GitHub's macos-13 runners are being
           # deprecated and are chronically queued, and gfortran can't cross-compile
           # x86_64 from arm64, so it needs a real (scarce) Intel runner. Re-add if
@@ -86,9 +84,7 @@ jobs:
             make
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-gcc-fortran
-            mingw-w64-x86_64-hdf5
-            mingw-w64-x86_64-netcdf
-            mingw-w64-x86_64-netcdf-fortran
+            mingw-w64-x86_64-zlib
             mingw-w64-x86_64-python
             mingw-w64-x86_64-python-pip
 
@@ -133,16 +129,15 @@ jobs:
           echo "PYBIN=$(dirname "$(command -v python)")" >> "$GITHUB_ENV"
 
       - name: Build native deps (HDF5 + NetCDF)
-        # Windows Phase-0 spike sources HDF5/NetCDF from MSYS2 (/mingw64) instead.
-        if: matrix.kind != 'windows'
         run: bash deps/build_deps_${{ matrix.kind }}.sh
         env:
           ARCH: ${{ matrix.arch }}
 
       - name: Build ESMF (mpiuni + NetCDF)
+        # DEPS_PREFIX is unset here, so build_esmf.sh defaults it to $REPO_ROOT/_deps
+        # on every platform -- the same prefix the "Build native deps" step installs
+        # into. (Windows used to override it to /mingw64 for the Phase-0 pacman deps.)
         run: bash build/build_esmf.sh
-        env:
-          DEPS_PREFIX: ${{ matrix.deps_prefix }}
 
       - name: Build pure ESMPy wheel
         run: |
@@ -158,8 +153,6 @@ jobs:
             --lib-dir dist/staged_lib --plat ${{ matrix.plat }} --outdir wheelhouse
 
       - name: Repair wheel (vendor native deps)
-        env:
-          DEPS_PREFIX: ${{ matrix.deps_prefix }}
         run: |
           if [ "${{ matrix.kind }}" = "linux" ]; then
             export LD_LIBRARY_PATH="$PWD/_deps/lib:${LD_LIBRARY_PATH:-}"
@@ -169,8 +162,13 @@ jobs:
             "$PYBIN/delocate-wheel" -w wheelhouse_repaired -v wheelhouse/esmpy-*.whl
           else
             # Windows: delvewheel vendors dependent DLLs from the deps bin dir. The
-            # library is dlopen'd by path, so --add-path points at the DLL closure.
-            DEPS="${DEPS_PREFIX:-/mingw64}"
+            # library is dlopen'd by path, so --add-path points at the DLL closure:
+            #   $PWD/_deps/bin -- our source-built HDF5/NetCDF-C/NetCDF-Fortran DLLs
+            #   /mingw64/bin   -- the MinGW compiler-runtime DLLs (libgfortran-5,
+            #                     libstdc++-6, libgcc_s_seh-1, libwinpthread-1) and
+            #                     zlib1.dll, which building the deps from source does
+            #                     NOT eliminate.
+            DEPS="$PWD/_deps"
             # --analyze-existing is essential here: esmpy ships NO .pyd extension
             # module, so delvewheel's default (root the dep graph at extension
             # modules) finds nothing and vendors nothing. This flag makes it treat
@@ -178,7 +176,7 @@ jobs:
             # root, so its DLL closure (libgfortran/netcdf/hdf5/...) gets vendored.
             # -v lists exactly what is analyzed + vendored in the log.
             python -m delvewheel repair -v --analyze-existing \
-              --add-path "$DEPS/bin" \
+              --add-path "$DEPS/bin:/mingw64/bin" \
               -w wheelhouse_repaired wheelhouse/esmpy-*.whl
           fi
 
