@@ -9,8 +9,11 @@ native dependencies, grafts them into a **relocatable, self-contained wheel**, a
 publishes it so users can `pip install esmpy` without compiling ESMF themselves.
 
 > **Status: work in progress.** The core feasibility check — does a wheel repair
-> tool vendor a `dlopen`-only library? — is confirmed: a serial + NetCDF Linux wheel
-> builds in CI (`manylinux_2_28`) and imports with `ESMFMKFILE` unset.
+> tool vendor a `dlopen`-only library? — is confirmed: serial + NetCDF wheels build
+> in CI for Linux (`manylinux_2_28`), macOS arm64, and Windows (`win_amd64`, via
+> MinGW/MSYS2) and import with `ESMFMKFILE` unset. The Windows wheel is validated
+> under a stock python.org CPython, proving its vendored native-DLL closure is
+> self-contained.
 >
 > Tracking:
 > - Upstream ESMF issue: <https://github.com/esmf-org/esmf/issues/256>
@@ -22,7 +25,7 @@ publishes it so users can `pip install esmpy` without compiling ESMF themselves.
 
 | Axis | Supported now (first milestone) | Planned (additive) |
 |------|---------------------------------|--------------------|
-| OS / arch | Linux x86_64 (manylinux_2_28), macOS arm64 | + Linux aarch64, + Intel macOS, + Windows |
+| OS / arch | Linux x86_64 (manylinux_2_28), macOS arm64, Windows x86_64 (win_amd64) | + Linux aarch64, + Intel macOS |
 | MPI  | serial (`mpiuni`)               | + MPICH (mpi4py ABI) |
 | I/O  | NetCDF-C + NetCDF-Fortran + HDF5 bundled | |
 
