@@ -25,7 +25,16 @@ export FC="${FC:-gfortran}"
 # No -fPIC: it is a no-op on Windows (all code is position-independent) and only
 # emits a warning. No -Wl,-rpath either: Windows resolves DLLs via PATH, not rpath
 # (build_esmf.sh prepends $DEPS_PREFIX/bin + /lib to PATH for the ESMF link/run).
-export CFLAGS="${CFLAGS:-}"
+#
+# Demote GCC 14's newly-default errors back to warnings. MSYS2 ships GCC 14+, which
+# promoted several long-standing C warnings to hard errors; the 2022-era netcdf-c
+# 4.9.0 sources trip them (e.g. dpathmgr.c's Windows _wstat64 path passes
+# `struct stat *` where `struct _stat64 *` is expected -> -Werror=incompatible-
+# pointer-types). Older GCC accepted these with a warning. Relaxing the error-ness
+# restores the pre-GCC-14 behavior without changing codegen.
+GCC14_RELAX="-Wno-error=incompatible-pointer-types -Wno-error=implicit-function-declaration"
+GCC14_RELAX="$GCC14_RELAX -Wno-error=int-conversion -Wno-error=implicit-int"
+export CFLAGS="${CFLAGS:-} $GCC14_RELAX"
 export FFLAGS="${FFLAGS:-} -fallow-argument-mismatch"
 
 # Disable HDF5's _Float16 conversions on MinGW: gcc advertises the _Float16 type but
