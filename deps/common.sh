@@ -57,9 +57,14 @@ build_netcdf_c() {
   pushd "$src" >/dev/null
   # Append the caller's CPPFLAGS/LDFLAGS (Windows passes -Wl,--export-all-symbols
   # here; Linux/macOS pass their -rpath) so per-OS wrappers can influence the link.
+  # NETCDF_C_CONFIGURE_EXTRA lets a per-OS wrapper pass extra ./configure flags.
+  # Windows uses it to --disable-filter-testing (netcdf-c's loadable HDF5/Zarr filter
+  # plugin modules have deliberately-undefined symbols and can't be built shared
+  # under MinGW; nothing in ESMF needs them).
   CPPFLAGS="-I$DEPS_PREFIX/include ${CPPFLAGS:-}" LDFLAGS="-L$DEPS_PREFIX/lib ${LDFLAGS:-}" \
     ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static \
-      --disable-dap --disable-byterange --with-pic
+      --disable-dap --disable-byterange --with-pic \
+      ${NETCDF_C_CONFIGURE_EXTRA:-}
   make -j"$(_ncpu)"
   make install
   popd >/dev/null

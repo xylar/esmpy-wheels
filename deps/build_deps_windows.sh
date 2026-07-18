@@ -47,6 +47,13 @@ export FFLAGS="${FFLAGS:-} -fallow-argument-mismatch"
 # threads this LDFLAGS into the netcdf-c/netcdf-fortran configure links.
 export LDFLAGS="${LDFLAGS:-} -Wl,--export-all-symbols"
 
+# Skip netcdf-c's loadable filter plugin modules (H5Z*/nczarr filters). They carry
+# deliberately-undefined symbols resolved at dlopen time, so libtool refuses to build
+# them as MinGW shared libraries ("cannot build ... unless -no-undefined"). They are
+# all gated behind ENABLE_FILTER_TESTING; ESMF uses none of them (netCDF-4 compression
+# is handled by HDF5's own built-in filters, not these wrappers).
+export NETCDF_C_CONFIGURE_EXTRA="--disable-filter-testing"
+
 # Disable HDF5's _Float16 conversions on MinGW: gcc advertises the _Float16 type but
 # MinGW's <float.h> does not define FLT16_MAX, so those H5Tconv.c functions fail to
 # compile. Nothing in the ESMF/NetCDF stack uses HDF5 float16 (MSYS2's own HDF5
