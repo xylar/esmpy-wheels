@@ -55,7 +55,9 @@ build_hdf5() {
 build_netcdf_c() {
   local src; src="$(download_extract "$NETCDF_C_URL" "$WORK_DIR/netcdf-c-$NETCDF_C_VERSION.tar.gz")"
   pushd "$src" >/dev/null
-  CPPFLAGS="-I$DEPS_PREFIX/include" LDFLAGS="-L$DEPS_PREFIX/lib" \
+  # Append the caller's CPPFLAGS/LDFLAGS (Windows passes -Wl,--export-all-symbols
+  # here; Linux/macOS pass their -rpath) so per-OS wrappers can influence the link.
+  CPPFLAGS="-I$DEPS_PREFIX/include ${CPPFLAGS:-}" LDFLAGS="-L$DEPS_PREFIX/lib ${LDFLAGS:-}" \
     ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static \
       --disable-dap --disable-byterange --with-pic
   make -j"$(_ncpu)"
@@ -66,7 +68,7 @@ build_netcdf_c() {
 build_netcdf_fortran() {
   local src; src="$(download_extract "$NETCDF_FORTRAN_URL" "$WORK_DIR/netcdf-fortran-$NETCDF_FORTRAN_VERSION.tar.gz")"
   pushd "$src" >/dev/null
-  CPPFLAGS="-I$DEPS_PREFIX/include" LDFLAGS="-L$DEPS_PREFIX/lib" \
+  CPPFLAGS="-I$DEPS_PREFIX/include ${CPPFLAGS:-}" LDFLAGS="-L$DEPS_PREFIX/lib ${LDFLAGS:-}" \
     LD_LIBRARY_PATH="$DEPS_PREFIX/lib:${LD_LIBRARY_PATH:-}" \
     ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static --with-pic
   make -j"$(_ncpu)"

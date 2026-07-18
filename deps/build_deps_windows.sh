@@ -37,6 +37,16 @@ GCC14_RELAX="$GCC14_RELAX -Wno-error=int-conversion -Wno-error=implicit-int"
 export CFLAGS="${CFLAGS:-} $GCC14_RELAX"
 export FFLAGS="${FFLAGS:-} -fallow-argument-mismatch"
 
+# Export the whole symbol table from the netcdf DLLs. netcdf-c bundles code that
+# carries __declspec(dllexport) (nczarr/ncpoco/...), and on MinGW *any* explicit
+# dllexport disables ld's auto-export-all -> the plain-extern netcdf C API never
+# lands in the DLL's export table, so its import lib (.dll.a) is missing nc_create,
+# nc_def_dim, etc. and anything linking -lnetcdf (netcdf's own ncgen/ncdump tools,
+# and later ESMF) fails with undefined references. --export-all-symbols overrides
+# that and exports everything. (Same fix as ESMF's --export-all-symbols.) common.sh
+# threads this LDFLAGS into the netcdf-c/netcdf-fortran configure links.
+export LDFLAGS="${LDFLAGS:-} -Wl,--export-all-symbols"
+
 # Disable HDF5's _Float16 conversions on MinGW: gcc advertises the _Float16 type but
 # MinGW's <float.h> does not define FLT16_MAX, so those H5Tconv.c functions fail to
 # compile. Nothing in the ESMF/NetCDF stack uses HDF5 float16 (MSYS2's own HDF5
