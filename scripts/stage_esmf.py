@@ -33,22 +33,26 @@ def find_esmf_mk(install_prefix: Path) -> Path:
 _NON_RUNTIME_SUFFIXES = (".a", ".lib", ".la", ".exp", ".def")
 
 
-def find_runtime_libs(libsdir: str) -> list[Path]:
+def _runtime_only(paths) -> list[Path]:
+    """Drop import/static/libtool artifacts, keeping only loadable objects."""
+    return [p for p in sorted(paths) if p.suffix not in _NON_RUNTIME_SUFFIXES]
+
+
+def find_runtime_libs(libsdir: str, install_prefix: Path) -> list[Path]:
     """Locate the runtime libesmf_fullylinked object(s).
 
-    Searches ``libsdir`` (ESMF_LIBSDIR from esmf.mk) and, as a fallback, the sibling
-    ``bin/`` directory -- on Windows the .dll installs to bin/ while the import lib
-    lands in lib/. Import/static libs are filtered out so only the loadable object
-    (.so/.dylib/.dll) is returned.
+    Searches, in order of preference: ``libsdir`` (ESMF_LIBSDIR from esmf.mk), then
+    the whole install prefix recursively. On Windows the ``.dll`` does not install
+    next to the ``.dll.a`` import lib in ``lib/libO/...`` -- it lands in a parallel
+    ``bin/binO/MinGW.*`` tree -- so a flat sibling-``bin/`` glob misses it; recursing
+    the prefix finds it wherever ESMF's install layout puts it. Import/static libs
+    are filtered out so only the loadable object (.so/.dylib/.dll) is returned.
     """
     lib_dir = Path(libsdir)
-    search_dirs = [lib_dir, lib_dir.parent / "bin"]
-    for d in search_dirs:
-        libs = [p for p in sorted(d.glob("libesmf_fullylinked.*"))
-                if p.suffix not in _NON_RUNTIME_SUFFIXES]
-        if libs:
-            return libs
-    return []
+    libs = _runtime_only(lib_dir.glob("libesmf_fullylinked.*"))
+    if libs:
+        return libs
+    return _runtime_only(install_prefix.rglob("libesmf_fullylinked.*"))
 
 
 def read_mk_var(esmf_mk: Path, key: str) -> str | None:
@@ -70,17 +74,25 @@ def main() -> None:
                         help="staging output directory (default: dist/staged_lib)")
     args = parser.parse_args()
 
-    esmf_mk = find_esmf_mk(args.install_prefix.resolve())
+    install_prefix = args.install_prefix.resolve()
+    esmf_mk = find_esmf_mk(install_prefix)
     libsdir = read_mk_var(esmf_mk, "ESMF_LIBSDIR")
     version = read_mk_var(esmf_mk, "ESMF_VERSION_STRING")
     if not libsdir:
         sys.exit(f"error: ESMF_LIBSDIR not found in {esmf_mk}")
 
     lib_dir = Path(libsdir)
-    libs = find_runtime_libs(libsdir)
+    libs = find_runtime_libs(libsdir, install_prefix)
     if not libs:
-        sys.exit(f"error: no runtime libesmf_fullylinked.* found in {lib_dir} "
-                 f"or its sibling bin/")
+        # Inventory every libesmf* artifact anywhere under the prefix so the CI log
+        # is decisive: if the fullylinked runtime object is simply absent (the link
+        # failed), this shows exactly what *was* produced instead.
+        inventory = sorted(install_prefix.rglob("libesmf*"))
+        listing = "\n".join(f"  {p.relative_to(install_prefix)}" for p in inventory) \
+            or "  (no libesmf* files found at all)"
+        sys.exit(f"error: no runtime libesmf_fullylinked.* found under {install_prefix}\n"
+                 f"ESMF_LIBSDIR was {lib_dir}\n"
+                 f"libesmf* artifacts present under the prefix:\n{listing}")
 
     args.dest.mkdir(parents=True, exist_ok=True)
     shutil.copy2(esmf_mk, args.dest / "esmf.mk")

@@ -94,4 +94,12 @@ make -C "$ESMF_DIR" install
 ESMF_MK="$(find "$ESMF_INSTALL_PREFIX" -name esmf.mk -print -quit)"
 echo "==> Installed esmf.mk: $ESMF_MK"
 
+# Inventory the installed libesmf* artifacts (name + location). This makes the log
+# self-diagnosing: whether libesmf_fullylinked.dll got built (and into lib/ vs the
+# bin/binO tree) or the fullylinked link failed silently is visible right here,
+# without needing a separate stage_esmf.py run.
+echo "==> Installed libesmf* artifacts:"
+find "$ESMF_INSTALL_PREFIX" -iname 'libesmf*' -printf '    %p\n' 2>/dev/null \
+  || find "$ESMF_INSTALL_PREFIX" -iname 'libesmf*' -exec echo '    {}' \;
+
 echo "==> Done. Next: python scripts/stage_esmf.py --install-prefix $ESMF_INSTALL_PREFIX ..."
