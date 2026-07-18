@@ -54,6 +54,14 @@ export LDFLAGS="${LDFLAGS:-} -Wl,--export-all-symbols"
 # is handled by HDF5's own built-in filters, not these wrappers).
 export NETCDF_C_CONFIGURE_EXTRA="--disable-filter-testing"
 
+# Let libtool build libnetcdff.dll. netcdf-fortran 4.5.4 does not inject the
+# -no-undefined libtool needs on MinGW (unlike netcdf-c), so libtool refuses the
+# shared build. Supply it at build time only (common.sh applies this at `make`, not
+# during ./configure, because plain gcc rejects the -no-undefined token). All of
+# libnetcdff's symbols resolve: the netcdf C API via -lnetcdf (from $DEPS_PREFIX/lib)
+# and the Fortran runtime via the gfortran driver.
+export NETCDF_FORTRAN_MAKE_LDFLAGS="-no-undefined"
+
 # Disable HDF5's _Float16 conversions on MinGW: gcc advertises the _Float16 type but
 # MinGW's <float.h> does not define FLT16_MAX, so those H5Tconv.c functions fail to
 # compile. Nothing in the ESMF/NetCDF stack uses HDF5 float16 (MSYS2's own HDF5

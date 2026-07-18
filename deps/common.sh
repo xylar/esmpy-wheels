@@ -76,7 +76,17 @@ build_netcdf_fortran() {
   CPPFLAGS="-I$DEPS_PREFIX/include ${CPPFLAGS:-}" LDFLAGS="-L$DEPS_PREFIX/lib ${LDFLAGS:-}" \
     LD_LIBRARY_PATH="$DEPS_PREFIX/lib:${LD_LIBRARY_PATH:-}" \
     ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static --with-pic
-  make -j"$(_ncpu)"
+  # NETCDF_FORTRAN_MAKE_LDFLAGS: extra link flags applied only at build time, NOT
+  # during ./configure's compiler probes. Windows needs libtool's -no-undefined to
+  # build libnetcdff.dll (netcdf-fortran 4.5.4 lacks the MinGW handling netcdf-c
+  # has), but -no-undefined is a libtool token that plain gcc rejects, so it must
+  # not leak into configure's link tests. Overriding LDFLAGS at `make` re-supplies
+  # the configure-time flags plus the build-only ones.
+  if [ -n "${NETCDF_FORTRAN_MAKE_LDFLAGS:-}" ]; then
+    make -j"$(_ncpu)" LDFLAGS="-L$DEPS_PREFIX/lib ${LDFLAGS:-} $NETCDF_FORTRAN_MAKE_LDFLAGS"
+  else
+    make -j"$(_ncpu)"
+  fi
   make install
   popd >/dev/null
 }
