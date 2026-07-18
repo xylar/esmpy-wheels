@@ -178,14 +178,18 @@ jobs:
 
       - name: Smoke test (ESMFMKFILE unset)
         run: |
-          if [ "${{ matrix.kind }}" = "windows" ]; then
-            python3 -m venv "$PWD/testenv" && . "$PWD/testenv/Scripts/activate"
+          python3 -m venv "$PWD/testenv"
+          # venv bin dir differs by platform/toolchain: POSIX (incl. MSYS2 MinGW
+          # python) uses bin/, native-Windows CPython uses Scripts/. Call the venv
+          # interpreter by path instead of sourcing activate (which is what varies).
+          if [ -x "$PWD/testenv/bin/python" ]; then
+            VPY="$PWD/testenv/bin/python"
           else
-            python3 -m venv /tmp/testenv && . /tmp/testenv/bin/activate
+            VPY="$PWD/testenv/Scripts/python"
           fi
-          pip install wheelhouse_repaired/esmpy-*.whl
+          "$VPY" -m pip install wheelhouse_repaired/esmpy-*.whl
           unset ESMFMKFILE
-          python -c "import esmpy; print('esmpy', esmpy.__version__)"
+          "$VPY" -c "import esmpy; print('esmpy', esmpy.__version__)"
           # TODO: run esmf/src/addon/esmpy/src/esmpy/test regridding subset
 
       - uses: actions/upload-artifact@v4
