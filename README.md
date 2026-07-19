@@ -13,8 +13,9 @@ publishes it so users can `pip install esmpy` without compiling ESMF themselves.
 > in CI for Linux (`manylinux_2_28`), macOS arm64, and Windows (`win_amd64`, via
 > MinGW/MSYS2) and import with `ESMFMKFILE` unset. The Windows wheel is validated
 > under a stock python.org CPython, proving its vendored native-DLL closure is
-> self-contained. The MPICH variant (`esmpy-mpich`) additionally builds for Linux +
-> macOS and passes a `mpiexec -n 4` multi-rank check (see [MPI variant](#mpi-variant-esmpy-mpich)).
+> self-contained. The MPI variants (`esmpy-mpich`, `esmpy-openmpi`) additionally
+> build for Linux + macOS and pass a `mpiexec -n 4` multi-rank check (see
+> [MPI variants](#mpi-variants-esmpy-mpich--esmpy-openmpi)).
 >
 > Tracking:
 > - Upstream ESMF issue: <https://github.com/esmf-org/esmf/issues/256>
@@ -27,13 +28,16 @@ publishes it so users can `pip install esmpy` without compiling ESMF themselves.
 | Axis | Supported now | Planned (additive) |
 |------|---------------|--------------------|
 | OS / arch | Linux x86_64 (manylinux_2_28), macOS arm64, Windows x86_64 (win_amd64) | + Linux aarch64, + Intel macOS |
-| MPI  | serial (`mpiuni`) → `esmpy`; **MPICH → `esmpy-mpich`** (Linux + macOS) | + Open MPI (`esmpy-openmpi`) |
+| MPI  | serial (`mpiuni`) → `esmpy`; **MPICH → `esmpy-mpich`**; **Open MPI → `esmpy-openmpi`** (both Linux + macOS) | |
 | I/O  | NetCDF-C + NetCDF-Fortran + HDF5 bundled | |
 
-Two distribution names are published: **`esmpy`** (serial) and **`esmpy-mpich`**
-(real ESMF MPI via MPICH). They share the `esmpy` import package but can't share a
-runtime, so they are separate distributions (mirroring conda-forge's nompi/mpi split
-and `mpi4py-mpich`). Windows is serial-only for now — there is no MPICH Windows wheel.
+Three distribution names are published: **`esmpy`** (serial), **`esmpy-mpich`**
+(real ESMF MPI via MPICH), and **`esmpy-openmpi`** (real ESMF MPI via Open MPI). They
+share the `esmpy` import package but can't share a runtime, so they are separate
+distributions (mirroring conda-forge's nompi/mpi split and `mpi4py-mpich`/
+`mpi4py-openmpi`). MPICH and Open MPI are ABI-incompatible (`libmpi.so.12` vs
+`libmpi.so.40`), which is why the names are implementation-specific. Windows is
+serial-only for now — there is no MPICH or Open MPI Windows wheel.
 
 Intel macOS (osx-64) is intentionally deferred (see the CI matrix note): GitHub's
 Intel runners are being deprecated and gfortran can't cross-compile x86_64 from
@@ -69,29 +73,41 @@ installed package and resolves the library directory relative to it, so no
 > non-extension library that nothing links against at build time (ESMPy `dlopen`s it
 > by path). This must be confirmed before investing further.
 
-## MPI variant (`esmpy-mpich`)
+## MPI variants (`esmpy-mpich` / `esmpy-openmpi`)
 
-The MPICH build follows the mpi4py/PETSc model — **build against a source MPI, depend
+Both MPI builds follow the mpi4py/PETSc model — **build against a source MPI, depend
 on the runtime wheel**:
 
-- **Build time:** MPICH is built from source (`deps/common.sh:build_mpich`, pinned in
-  `versions.env`), and ESMF is built with `ESMF_COMM=mpich`. `ESMF_PIO=OFF` is kept so
-  the only MPI dependency that enters `libesmf_fullylinked` is the **C** `libmpi`.
+- **Build time:** the MPI implementation is built from source
+  (`deps/common.sh:build_mpich` / `build_openmpi`, pinned in `versions.env`), and ESMF
+  is built with `ESMF_COMM=mpich` or `ESMF_COMM=openmpi`. `ESMF_PIO=OFF` is kept so the
+  only MPI dependency that enters `libesmf_fullylinked` is the **C** `libmpi`.
 - **Runtime:** `libmpi` is **not** vendored (`auditwheel`/`delocate` exclude it);
-  instead `esmpy-mpich` depends on the PyPI [`mpich`](https://pypi.org/project/mpich/)
-  runtime wheel, which supplies `libmpi.so.12` (macOS `libmpi.12.dylib`) **and**
-  `mpiexec`. The ESMPy loader preloads that `libmpi` before `dlopen`-ing ESMF.
+  instead each distribution depends on the matching PyPI runtime wheel —
+  [`mpich`](https://pypi.org/project/mpich/) (`libmpi.so.12`, macOS `libmpi.12.dylib`)
+  or [`openmpi`](https://pypi.org/project/openmpi/) (`libmpi.so.40`, macOS
+  `libmpi.40.dylib`) — which supplies that `libmpi` **and** `mpiexec`. The ESMPy loader
+  preloads `libmpi` before `dlopen`-ing ESMF.
 
 ```bash
-pip install esmpy-mpich                  # pulls the `mpich` runtime wheel too
+pip install esmpy-mpich                  # or: pip install esmpy-openmpi
 mpiexec -n 4 python my_regrid_script.py  # real multi-rank ESMF VM
 ```
 
-This keeps a single MPI runtime in the environment (so `pip install mpi4py` shares the
-same ABI-compatible MPI) and targets **single-node** parallelism. Because MPICH honors
-the [MPI ABI-compatibility initiative](https://www.mpich.org/abi/) (`libmpi.so.12`), the
+MPICH and Open MPI are **ABI-incompatible** (`libmpi.so.12` vs `libmpi.so.40`), so they
+are separate distributions and can never share a runtime — pick the one matching the MPI
+already in your environment. Each keeps a single MPI runtime in the environment (so
+`pip install mpi4py-mpich` / `mpi4py-openmpi` shares the same ABI-compatible MPI) and
+targets **single-node** parallelism. Because MPICH honors the
+[MPI ABI-compatibility initiative](https://www.mpich.org/abi/) (`libmpi.so.12`), the
 `mpich` runtime can in principle be pointed at a system MPI (Intel MPI, Cray MPT) — a
 best-effort escape hatch, but genuine multi-node HPC still wants a spack/system build.
+
+> **Open MPI on Linux runs as root in CI.** Open MPI's PRRTE launcher refuses to run as
+> root, which the manylinux container is; the CI smoke test sets
+> `OMPI_ALLOW_RUN_AS_ROOT=1` / `OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1` (plus
+> `OMPI_MCA_rmaps_base_oversubscribe=true`) to allow it. Normal (non-root) use needs
+> none of these.
 
 ## Layout
 
