@@ -25,11 +25,16 @@ publishes it so users can `pip install esmpy` without compiling ESMF themselves.
 
 ## Scope
 
-| Axis | Supported now | Planned (additive) |
-|------|---------------|--------------------|
-| OS / arch | Linux x86_64 + aarch64 (manylinux_2_28), macOS arm64, Windows x86_64 (win_amd64) | + Intel macOS |
-| MPI  | serial (`mpiuni`) → `esmpy`; **MPICH → `esmpy-mpich`**; **Open MPI → `esmpy-openmpi`** (both Linux + macOS) | |
-| I/O  | NetCDF-C + NetCDF-Fortran + HDF5 bundled | |
+| Axis | Supported |
+|------|-----------|
+| OS / arch | Linux x86_64 + aarch64 (manylinux_2_28), macOS arm64, Windows x86_64 (win_amd64) |
+| MPI  | serial (`mpiuni`) → `esmpy`; **MPICH → `esmpy-mpich`**; **Open MPI → `esmpy-openmpi`** (both Linux + macOS) |
+| I/O  | NetCDF-C + NetCDF-Fortran + HDF5 bundled |
+
+**Intel macOS (`osx-64`) is not planned.** Apple has moved to arm64, GitHub's Intel
+runners are deprecated, and gfortran can't cross-compile x86_64 from arm64 — so it
+would need a scarce paid or self-hosted Intel runner to serve a shrinking audience.
+Users on Intel Macs can still build ESMPy from source or install it via conda-forge.
 
 Three distribution names are published: **`esmpy`** (serial), **`esmpy-mpich`**
 (real ESMF MPI via MPICH), and **`esmpy-openmpi`** (real ESMF MPI via Open MPI). They

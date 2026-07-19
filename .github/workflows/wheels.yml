@@ -145,10 +145,12 @@ jobs:
             variant: openmpi
             esmf_comm: openmpi
             shell: bash
-          # Intel macOS (osx-64) is deferred: GitHub's macos-13 runners are being
-          # deprecated and are chronically queued, and gfortran can't cross-compile
-          # x86_64 from arm64, so it needs a real (scarce) Intel runner. Re-add if
-          # demand justifies a paid/self-hosted x86_64 macOS runner.
+          # Intel macOS (osx-64) is NOT planned. GitHub's macos-13 runners are
+          # deprecated and chronically queued, and gfortran can't cross-compile
+          # x86_64 from arm64, so it would need a scarce paid/self-hosted Intel
+          # runner for a shrinking audience. Intel-Mac users should build from
+          # source or use conda-forge. (Kept as a comment only to record the
+          # decision -- this is not a TODO.)
           # - os: macos-13
           #   kind: macos
           #   arch: x86_64
