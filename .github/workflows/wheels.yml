@@ -3,11 +3,15 @@ name: wheels
 # Matrix over (OS/arch) x variant. One py3-none-<platform> wheel per cell because
 # ESMPy has no extension module.
 #   - variant=serial (mpiuni): Linux + macOS + Windows -> distribution `esmpy`.
-#   - variant=mpich  (ESMF_COMM=mpich): Linux + macOS   -> distribution `esmpy-mpich`.
-#     Builds MPICH from source (deps/common.sh:build_mpich), does NOT vendor libmpi,
-#     and depends on the PyPI `mpich` runtime wheel (libmpi + mpiexec). Windows is
-#     deferred (no MPICH Windows wheel). Selected via the per-entry `esmf_comm` key,
-#     surfaced as the job-level ESMF_COMM env.
+#   - variant=mpich   (ESMF_COMM=mpich):   Linux + macOS -> distribution `esmpy-mpich`.
+#   - variant=openmpi (ESMF_COMM=openmpi): Linux + macOS -> distribution `esmpy-openmpi`.
+#     Each MPI variant builds its MPI from source (deps/common.sh:build_mpich /
+#     build_openmpi), does NOT vendor libmpi, and depends on the matching PyPI
+#     runtime wheel (`mpich` -> libmpi.so.12, `openmpi` -> libmpi.so.40; each ships
+#     libmpi + mpiexec). MPICH and Open MPI are ABI-incompatible, hence distinct
+#     distributions. Windows is deferred for both (no MPICH/Open MPI Windows wheel).
+#     Selected via the per-entry `esmf_comm` key, surfaced as the job-level
+#     ESMF_COMM env.
 #
 # All platforms build HDF5 + NetCDF-C + NetCDF-Fortran from source at the versions
 # pinned in versions.env (deps/build_deps_<kind>.sh). MSYS2 still provides the MinGW
@@ -34,9 +38,10 @@ jobs:
     name: ${{ matrix.plat }} (${{ matrix.variant }})
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
-    # ESMF_COMM selects serial (mpiuni) vs the MPICH variant. Empty for serial
-    # entries (matrix.esmf_comm unset) -> versions.env's ${ESMF_COMM:-mpiuni}
-    # defaults it. Both the deps build (build_mpich) and Build ESMF key off it.
+    # ESMF_COMM selects serial (mpiuni) vs an MPI variant (mpich/openmpi). Empty for
+    # serial entries (matrix.esmf_comm unset) -> versions.env's ${ESMF_COMM:-mpiuni}
+    # defaults it. Both the deps build (build_mpich/build_openmpi) and Build ESMF
+    # key off it.
     env:
       ESMF_COMM: ${{ matrix.esmf_comm }}
     # matrix.shell is bash on Linux/macOS and 'msys2 {0}' on Windows. The matrix
@@ -89,6 +94,28 @@ jobs:
             plat: macosx_14_0_arm64
             variant: mpich
             esmf_comm: mpich
+            shell: bash
+          # --- Open MPI wheels: `esmpy-openmpi` (Linux + macOS only) ---------
+          # Mirrors the MPICH cells with Open-MPI-specific deltas: build Open MPI
+          # from source (deps/common.sh:build_openmpi), build ESMF with
+          # ESMF_COMM=openmpi, do NOT vendor libmpi (soname libmpi.so.40), and
+          # depend on the PyPI `openmpi` runtime wheel. Open MPI is ABI-incompatible
+          # with MPICH, so this is a separate distribution. Windows is deferred (no
+          # Open MPI Windows wheel).
+          - os: ubuntu-latest
+            kind: linux
+            arch: x86_64
+            plat: linux_x86_64
+            variant: openmpi
+            esmf_comm: openmpi
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            shell: bash
+          - os: macos-14
+            kind: macos
+            arch: arm64
+            plat: macosx_14_0_arm64
+            variant: openmpi
+            esmf_comm: openmpi
             shell: bash
           # Intel macOS (osx-64) is deferred: GitHub's macos-13 runners are being
           # deprecated and are chronically queued, and gfortran can't cross-compile
@@ -174,24 +201,65 @@ jobs:
       - name: Build pure ESMPy wheel
         run: |
           PY="${PYBIN:+$PYBIN/}python3"; PY="${PY:-python3}"
-          # MPI variant: publish as a distinct distribution `esmpy-mpich` that
-          # install-requires the PyPI `mpich` runtime wheel (supplies libmpi +
-          # mpiexec). Patch the ESMPy pyproject at build time -- a build-only
-          # overlay, not a committed ESMF change, so the same checkout yields
-          # serial `esmpy` or `esmpy-mpich` by variant. The import package stays
-          # `esmpy`.
-          if [ "${{ matrix.variant }}" = "mpich" ]; then
-            source versions.env
-            $PY scripts/set_mpi_dist.py \
-              --pyproject esmf/src/addon/esmpy/pyproject.toml \
-              --dist-name esmpy-mpich --require "mpich >= $MPICH_VERSION"
-          fi
+          # MPI variant: publish as a distinct distribution (`esmpy-mpich` /
+          # `esmpy-openmpi`) that install-requires the matching PyPI MPI runtime
+          # wheel (supplies libmpi + mpiexec). Patch the ESMPy pyproject at build
+          # time -- a build-only overlay, not a committed ESMF change, so the same
+          # checkout yields serial `esmpy` or an MPI distribution by variant. The
+          # import package stays `esmpy`.
+          source versions.env
+          case "${{ matrix.variant }}" in
+            mpich)
+              $PY scripts/set_mpi_dist.py \
+                --pyproject esmf/src/addon/esmpy/pyproject.toml \
+                --dist-name esmpy-mpich --require "mpich >= $MPICH_VERSION" ;;
+            openmpi)
+              $PY scripts/set_mpi_dist.py \
+                --pyproject esmf/src/addon/esmpy/pyproject.toml \
+                --dist-name esmpy-openmpi --require "openmpi >= $OPENMPI_VERSION" ;;
+          esac
           $PY -m build --wheel esmf/src/addon/esmpy --outdir dist
 
       - name: Stage + graft ESMF into the wheel
         run: |
           PY="${PYBIN:+$PYBIN/}python3"; PY="${PY:-python3}"
           $PY scripts/stage_esmf.py --install-prefix _esmf_install --dest dist/staged_lib
+          # macOS + MPI variant: retarget libesmf's C libmpi dependency to the runtime
+          # wheel's libmpi *by install name* so the loadESMF.py preload is what dyld
+          # binds to. ESMF links against the source-built libmpi in _deps, which bakes
+          # an ABSOLUTE _deps/lib/libmpi.N.dylib install name into libesmf. Under
+          # macOS's two-level namespace dyld binds to that exact id, so at runtime it
+          # loads the stale source-built libmpi -- present in CI (masking the bug), but
+          # ABSENT on a user's machine -- instead of the PyPI `mpich`/`openmpi` wheel's
+          # libmpi that loadESMF.py preloads. That split (app on the _deps build, the
+          # `mpiexec`/PRRTE launcher on the wheel build) is what segfaults Open MPI at
+          # MPI_Init. The wheel's libmpi ships install id @rpath/libmpi.N.dylib, so
+          # rewriting libesmf's dependency to that exact string makes dyld reuse the
+          # already-preloaded wheel image (matched by install name), keeping app +
+          # launcher on ONE MPI build -- as on Linux, where RTLD_GLOBAL already does
+          # this. delocate leaves the excluded libmpi ref untouched, so fix it here.
+          # (Re-sign ad-hoc: install_name_tool invalidates the arm64 signature;
+          # delocate re-signs later too, but do it now so nothing loads unsigned.)
+          if [ "${{ matrix.kind }}" = "macos" ]; then
+            case "${{ matrix.variant }}" in
+              mpich)   MPI_DYLIB=libmpi.12.dylib ;;
+              openmpi) MPI_DYLIB=libmpi.40.dylib ;;
+              *)       MPI_DYLIB="" ;;
+            esac
+            if [ -n "$MPI_DYLIB" ]; then
+              LIB=dist/staged_lib/libesmf_fullylinked.dylib
+              echo "==> libesmf libmpi ref BEFORE:"; otool -L "$LIB" | grep -i libmpi || true
+              CUR="$(otool -L "$LIB" | awk -v d="$MPI_DYLIB" 'index($1, d) {print $1; exit}')"
+              if [ -n "$CUR" ]; then
+                install_name_tool -change "$CUR" "@rpath/$MPI_DYLIB" "$LIB"
+                codesign --force --sign - "$LIB"
+                echo "==> rewrote libmpi ref: $CUR -> @rpath/$MPI_DYLIB"
+              else
+                echo "==> WARNING: no $MPI_DYLIB dependency found in $LIB"
+              fi
+              echo "==> libesmf libmpi ref AFTER:"; otool -L "$LIB" | grep -i libmpi || true
+            fi
+          fi
           # esmpy*-...any.whl matches both `esmpy-` (serial) and `esmpy_mpich-`
           # (the dist name normalizes the hyphen to an underscore in wheel files);
           # only one exists per run. graft_wheel.py carries the dist name through.
@@ -202,21 +270,27 @@ jobs:
       - name: Repair wheel (vendor native deps)
         run: |
           # MPI variant: do NOT vendor libmpi -- it is provided at runtime by the
-          # PyPI `mpich` wheel (an install-requires of esmpy-mpich) and preloaded
-          # by loadESMF.py. Excluding it keeps a single MPI runtime in the env and
-          # preserves MPICH-ABI swap for system MPI. libmpi.so.12 is the MPICH ABI
-          # soname (macOS: libmpi.12.dylib). HDF5/NetCDF/gfortran are still vendored;
-          # anything else in libesmf's closure (e.g. libmpifort) is vendored too.
-          # Exclude ONLY the C libmpi, by its exact soname/dylib. delocate's
-          # --exclude is a path substring match, so a bare "libmpi" would also
-          # catch libmpifort -- which the `mpich` wheel does NOT ship; naming the
-          # versioned file precisely lets libmpifort (if libesmf needs it) still be
-          # vendored. auditwheel matches the soname, already precise.
+          # matching PyPI MPI wheel (an install-requires of the esmpy-mpich /
+          # esmpy-openmpi distribution) and preloaded by loadESMF.py. Excluding it
+          # keeps a single MPI runtime in the env and preserves the ABI swap for a
+          # system MPI. The C libmpi soname is libmpi.so.12 for MPICH and
+          # libmpi.so.40 for Open MPI (macOS: libmpi.12.dylib / libmpi.40.dylib).
+          # HDF5/NetCDF/gfortran are still vendored; anything else in libesmf's
+          # closure (e.g. libmpifort) is vendored too. Exclude ONLY the C libmpi, by
+          # its exact soname/dylib. delocate's --exclude is a path substring match,
+          # so a bare "libmpi" would also catch libmpifort -- which the runtime
+          # wheels do NOT ship; naming the versioned file precisely lets libmpifort
+          # (if libesmf needs it) still be vendored. auditwheel matches the soname,
+          # already precise.
           AW_EXCLUDE=""; DL_EXCLUDE=""
-          if [ "${{ matrix.variant }}" = "mpich" ]; then
-            AW_EXCLUDE="--exclude libmpi.so.12"
-            DL_EXCLUDE="--exclude libmpi.12.dylib"
-          fi
+          case "${{ matrix.variant }}" in
+            mpich)
+              AW_EXCLUDE="--exclude libmpi.so.12"
+              DL_EXCLUDE="--exclude libmpi.12.dylib" ;;
+            openmpi)
+              AW_EXCLUDE="--exclude libmpi.so.40"
+              DL_EXCLUDE="--exclude libmpi.40.dylib" ;;
+          esac
           if [ "${{ matrix.kind }}" = "linux" ]; then
             export LD_LIBRARY_PATH="$PWD/_deps/lib:${LD_LIBRARY_PATH:-}"
             "$PYBIN/python" -m auditwheel repair $AW_EXCLUDE wheelhouse/esmpy*.whl -w wheelhouse_repaired
@@ -247,18 +321,33 @@ jobs:
         if: matrix.kind != 'windows'
         run: |
           python3 -m venv /tmp/testenv && . /tmp/testenv/bin/activate
-          # For esmpy-mpich this also pulls the `mpich` runtime wheel from PyPI
-          # (libmpi + mpiexec), exercising the loadESMF.py libmpi preload path.
+          # For an MPI variant this also pulls the matching runtime wheel from PyPI
+          # (`mpich` / `openmpi`, each supplying libmpi + mpiexec), exercising the
+          # loadESMF.py libmpi preload path.
           pip install wheelhouse_repaired/esmpy*.whl
           unset ESMFMKFILE
           python -c "import esmpy; print('esmpy', esmpy.__version__)"
           # MPI variant: prove real multi-rank ESMF VM parallelism (not mpiuni).
-          # local_pet()/pet_count() are @initialize-decorated, so they bring up
-          # the ESMF VM; under `mpiexec -n 4` a real MPICH build reports 4 PETs
-          # (mpiuni would report 1). mpiexec comes from the `mpich` runtime wheel.
-          if [ "${{ matrix.variant }}" = "mpich" ]; then
-            mpiexec -n 4 python -c "import esmpy; print('PET', esmpy.local_pet(), 'of', esmpy.pet_count())"
-          fi
+          # local_pet()/pet_count() are @initialize-decorated, so they bring up the
+          # ESMF VM; under `mpiexec -n 4` a real MPI build reports 4 PETs (mpiuni
+          # would report 1). mpiexec comes from the runtime wheel.
+          MPI_RUN="mpiexec -n 4"
+          case "${{ matrix.variant }}" in
+            openmpi)
+              # Open MPI's launcher is PRRTE. Two runner-environment quirks to handle:
+              #   - PRRTE refuses to run as root, and the manylinux container is root,
+              #     so opt in via OMPI_ALLOW_RUN_AS_ROOT[_CONFIRM].
+              #   - Runners expose fewer than 4 cores (= PRRTE slots), so -n 4 needs
+              #     oversubscription. Open MPI 5's PRRTE ignores the old v4 MCA param
+              #     OMPI_MCA_rmaps_base_oversubscribe; pass --map-by :OVERSUBSCRIBE on
+              #     the command line instead (what the "not enough slots" error itself
+              #     recommends). Both Linux (root, <4 cores) and macOS (non-root, <4
+              #     cores) need the map-by; only Linux needs the root opt-in.
+              export OMPI_ALLOW_RUN_AS_ROOT=1 OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+              mpiexec --map-by :OVERSUBSCRIBE -n 4 python -c "import esmpy; print('PET', esmpy.local_pet(), 'of', esmpy.pet_count())" ;;
+            mpich)
+              $MPI_RUN python -c "import esmpy; print('PET', esmpy.local_pet(), 'of', esmpy.pet_count())" ;;
+          esac
           # TODO: run esmf/src/addon/esmpy/src/esmpy/test regridding subset
 
       # Windows: validate the win_amd64 wheel under a real python.org CPython (not the

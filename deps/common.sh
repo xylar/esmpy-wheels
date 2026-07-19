@@ -57,6 +57,27 @@ build_mpich() {
   popd >/dev/null
 }
 
+build_openmpi() {
+  local src; src="$(download_extract "$OPENMPI_URL" "$WORK_DIR/openmpi-$OPENMPI_VERSION.tar.gz")"
+  pushd "$src" >/dev/null
+  # Build the full Open MPI (C + C++ + Fortran wrappers): ESMF's openmpi build_rules
+  # compile with mpifort/mpicxx, so those wrappers -- and the C libmpi ESMF
+  # ultimately links -- must come from here. The install lands in $DEPS_PREFIX/{bin,
+  # lib}; build_esmf.sh puts $DEPS_PREFIX/bin on PATH so ESMF picks up these wrappers.
+  #
+  # The v5 release tarball bundles PMIx/PRRTE/hwloc/libevent (built internal by
+  # default) and ships pre-built man pages, so no extra system deps are needed;
+  # --disable-sphinx guards against a docs-build attempt. It uses the caller's
+  # CC/CXX/FC/CFLAGS/FFLAGS (the wrapper already exports CXX). The Open MPI build is
+  # noticeably longer than MPICH.
+  CXX="${CXX:-g++}" \
+    ./configure --prefix="$DEPS_PREFIX" --enable-shared --disable-static \
+      --enable-mpi-fortran=all --disable-sphinx
+  make -j"$(_ncpu)"
+  make install
+  popd >/dev/null
+}
+
 build_hdf5() {
   local src; src="$(download_extract "$HDF5_URL" "$WORK_DIR/hdf5-$HDF5_VERSION.tar.gz")"
   pushd "$src" >/dev/null
@@ -113,11 +134,12 @@ build_netcdf_fortran() {
 build_all_deps() {
   mkdir -p "$DEPS_PREFIX" "$WORK_DIR"
   # MPI variant: build the MPI implementation before the NetCDF stack. Keyed off
-  # ESMF_COMM so a future openmpi variant just adds a case here. Serial (mpiuni)
-  # builds none. NetCDF-C/Fortran stay serial regardless -- they build with the
-  # plain CC/FC the wrapper exports (gcc/gfortran), not the MPI compiler wrappers.
+  # ESMF_COMM so each MPI flavor is just a case here. Serial (mpiuni) builds none.
+  # NetCDF-C/Fortran stay serial regardless -- they build with the plain CC/FC the
+  # wrapper exports (gcc/gfortran), not the MPI compiler wrappers.
   case "${ESMF_COMM:-mpiuni}" in
     mpich) build_mpich ;;
+    openmpi) build_openmpi ;;
     mpiuni) ;;
     *) echo "error: unsupported ESMF_COMM='$ESMF_COMM' for deps build" >&2; return 1 ;;
   esac
