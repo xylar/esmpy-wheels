@@ -14,6 +14,7 @@ export DEPS_PREFIX="${DEPS_PREFIX:-$REPO_ROOT/_deps}"
 export WORK_DIR="${WORK_DIR:-$REPO_ROOT/build/work}"
 
 export CC="${CC:-gcc}"
+export CXX="${CXX:-g++}"   # only the MPICH build (MPI variant) uses this
 export FC="${FC:-gfortran}"
 # -fPIC is required for the fully-linked ESMF library. Static libgcc/libstdc++
 # reduces the risk of runtime version conflicts on old glibc (see netcdf4-win-wheels).

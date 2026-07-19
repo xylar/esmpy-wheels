@@ -1,17 +1,19 @@
 name: wheels
 
-# First-milestone matrix: serial (mpiuni) + NetCDF, Linux + macOS + Windows.
-# One py3-none-<platform> wheel per (OS, arch) because ESMPy has no extension module.
+# Matrix over (OS/arch) x variant. One py3-none-<platform> wheel per cell because
+# ESMPy has no extension module.
+#   - variant=serial (mpiuni): Linux + macOS + Windows -> distribution `esmpy`.
+#   - variant=mpich  (ESMF_COMM=mpich): Linux + macOS   -> distribution `esmpy-mpich`.
+#     Builds MPICH from source (deps/common.sh:build_mpich), does NOT vendor libmpi,
+#     and depends on the PyPI `mpich` runtime wheel (libmpi + mpiexec). Windows is
+#     deferred (no MPICH Windows wheel). Selected via the per-entry `esmf_comm` key,
+#     surfaced as the job-level ESMF_COMM env.
 #
-# This is a scaffold: the toolchain wiring (gfortran inside manylinux, macOS gfortran
-# via Homebrew, MinGW-w64 via MSYS2 on Windows, exact platform tags) is finalized
-# during the Phase-0 spike. Heavy builds are gated to tags / manual dispatch so pushes
-# don't trigger multi-hour runs.
-#
-# All three platforms now build HDF5 + NetCDF-C + NetCDF-Fortran from source at the
-# versions pinned in versions.env (deps/build_deps_<kind>.sh). MSYS2 still provides
-# the MinGW toolchain (gcc/gfortran/python) and zlib on Windows, but the pinned deps
-# are no longer taken from pacman.
+# All platforms build HDF5 + NetCDF-C + NetCDF-Fortran from source at the versions
+# pinned in versions.env (deps/build_deps_<kind>.sh). MSYS2 still provides the MinGW
+# toolchain (gcc/gfortran/python) and zlib on Windows, but the pinned deps are no
+# longer taken from pacman. Heavy builds are gated to tags / manual dispatch so
+# pushes don't trigger multi-hour runs.
 
 on:
   workflow_dispatch:
@@ -20,7 +22,7 @@ on:
     tags: ["v*"]
     paths-ignore: ["**.md", "LICENSE"]
   pull_request:
-    paths: ["deps/**", "build/**", "scripts/**", ".github/workflows/**"]
+    paths: ["deps/**", "build/**", "scripts/**", "versions.env", ".github/workflows/**"]
 
 # Supersede an in-progress run on the same ref instead of piling up.
 concurrency:
@@ -29,9 +31,14 @@ concurrency:
 
 jobs:
   build:
-    name: ${{ matrix.plat }}
+    name: ${{ matrix.plat }} (${{ matrix.variant }})
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
+    # ESMF_COMM selects serial (mpiuni) vs the MPICH variant. Empty for serial
+    # entries (matrix.esmf_comm unset) -> versions.env's ${ESMF_COMM:-mpiuni}
+    # defaults it. Both the deps build (build_mpich) and Build ESMF key off it.
+    env:
+      ESMF_COMM: ${{ matrix.esmf_comm }}
     # matrix.shell is bash on Linux/macOS and 'msys2 {0}' on Windows. The matrix
     # context is available in defaults.run.shell (but NOT in a step's own shell: key),
     # so all run: steps below inherit the right shell per platform.
@@ -42,23 +49,47 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # --- serial (mpiuni) wheels: `esmpy` -------------------------------
           - os: ubuntu-latest
             kind: linux
             arch: x86_64
             plat: linux_x86_64
+            variant: serial
             container: quay.io/pypa/manylinux_2_28_x86_64
             shell: bash
           - os: macos-14
             kind: macos
             arch: arm64
             plat: macosx_14_0_arm64
+            variant: serial
             shell: bash
           - os: windows-latest
             kind: windows
             arch: amd64
             plat: win_amd64
+            variant: serial
             # Every run: step below executes in the MSYS2 MINGW64 shell.
             shell: 'msys2 {0}'
+          # --- MPICH wheels: `esmpy-mpich` (Linux + macOS only) --------------
+          # Windows is deferred: no MPICH Windows wheel; MS-MPI+MinGW is a
+          # separate effort. These build MPICH from source (deps/common.sh),
+          # build ESMF with ESMF_COMM=mpich, do NOT vendor libmpi, and depend on
+          # the PyPI `mpich` runtime wheel (added to pyproject at build time).
+          - os: ubuntu-latest
+            kind: linux
+            arch: x86_64
+            plat: linux_x86_64
+            variant: mpich
+            esmf_comm: mpich
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            shell: bash
+          - os: macos-14
+            kind: macos
+            arch: arm64
+            plat: macosx_14_0_arm64
+            variant: mpich
+            esmf_comm: mpich
+            shell: bash
           # Intel macOS (osx-64) is deferred: GitHub's macos-13 runners are being
           # deprecated and are chronically queued, and gfortran can't cross-compile
           # x86_64 from arm64, so it needs a real (scarce) Intel runner. Re-add if
@@ -143,24 +174,55 @@ jobs:
       - name: Build pure ESMPy wheel
         run: |
           PY="${PYBIN:+$PYBIN/}python3"; PY="${PY:-python3}"
+          # MPI variant: publish as a distinct distribution `esmpy-mpich` that
+          # install-requires the PyPI `mpich` runtime wheel (supplies libmpi +
+          # mpiexec). Patch the ESMPy pyproject at build time -- a build-only
+          # overlay, not a committed ESMF change, so the same checkout yields
+          # serial `esmpy` or `esmpy-mpich` by variant. The import package stays
+          # `esmpy`.
+          if [ "${{ matrix.variant }}" = "mpich" ]; then
+            source versions.env
+            $PY scripts/set_mpi_dist.py \
+              --pyproject esmf/src/addon/esmpy/pyproject.toml \
+              --dist-name esmpy-mpich --require "mpich >= $MPICH_VERSION"
+          fi
           $PY -m build --wheel esmf/src/addon/esmpy --outdir dist
 
       - name: Stage + graft ESMF into the wheel
         run: |
           PY="${PYBIN:+$PYBIN/}python3"; PY="${PY:-python3}"
           $PY scripts/stage_esmf.py --install-prefix _esmf_install --dest dist/staged_lib
+          # esmpy*-...any.whl matches both `esmpy-` (serial) and `esmpy_mpich-`
+          # (the dist name normalizes the hyphen to an underscore in wheel files);
+          # only one exists per run. graft_wheel.py carries the dist name through.
           $PY scripts/graft_wheel.py \
-            --wheel dist/esmpy-*-py3-none-any.whl \
+            --wheel dist/esmpy*-py3-none-any.whl \
             --lib-dir dist/staged_lib --plat ${{ matrix.plat }} --outdir wheelhouse
 
       - name: Repair wheel (vendor native deps)
         run: |
+          # MPI variant: do NOT vendor libmpi -- it is provided at runtime by the
+          # PyPI `mpich` wheel (an install-requires of esmpy-mpich) and preloaded
+          # by loadESMF.py. Excluding it keeps a single MPI runtime in the env and
+          # preserves MPICH-ABI swap for system MPI. libmpi.so.12 is the MPICH ABI
+          # soname (macOS: libmpi.12.dylib). HDF5/NetCDF/gfortran are still vendored;
+          # anything else in libesmf's closure (e.g. libmpifort) is vendored too.
+          # Exclude ONLY the C libmpi, by its exact soname/dylib. delocate's
+          # --exclude is a path substring match, so a bare "libmpi" would also
+          # catch libmpifort -- which the `mpich` wheel does NOT ship; naming the
+          # versioned file precisely lets libmpifort (if libesmf needs it) still be
+          # vendored. auditwheel matches the soname, already precise.
+          AW_EXCLUDE=""; DL_EXCLUDE=""
+          if [ "${{ matrix.variant }}" = "mpich" ]; then
+            AW_EXCLUDE="--exclude libmpi.so.12"
+            DL_EXCLUDE="--exclude libmpi.12.dylib"
+          fi
           if [ "${{ matrix.kind }}" = "linux" ]; then
             export LD_LIBRARY_PATH="$PWD/_deps/lib:${LD_LIBRARY_PATH:-}"
-            "$PYBIN/python" -m auditwheel repair wheelhouse/esmpy-*.whl -w wheelhouse_repaired
+            "$PYBIN/python" -m auditwheel repair $AW_EXCLUDE wheelhouse/esmpy*.whl -w wheelhouse_repaired
           elif [ "${{ matrix.kind }}" = "macos" ]; then
             export DYLD_LIBRARY_PATH="$PWD/_deps/lib:${DYLD_LIBRARY_PATH:-}"
-            "$PYBIN/delocate-wheel" -w wheelhouse_repaired -v wheelhouse/esmpy-*.whl
+            "$PYBIN/delocate-wheel" $DL_EXCLUDE -w wheelhouse_repaired -v wheelhouse/esmpy*.whl
           else
             # Windows: delvewheel vendors dependent DLLs from the deps bin dir. The
             # library is dlopen'd by path, so --add-path points at the DLL closure:
@@ -178,16 +240,25 @@ jobs:
             # -v lists exactly what is analyzed + vendored in the log.
             python -m delvewheel repair -v --analyze-existing \
               --add-path "$DEPS/bin:/mingw64/bin" \
-              -w wheelhouse_repaired wheelhouse/esmpy-*.whl
+              -w wheelhouse_repaired wheelhouse/esmpy*.whl
           fi
 
       - name: Smoke test (ESMFMKFILE unset)
         if: matrix.kind != 'windows'
         run: |
           python3 -m venv /tmp/testenv && . /tmp/testenv/bin/activate
-          pip install wheelhouse_repaired/esmpy-*.whl
+          # For esmpy-mpich this also pulls the `mpich` runtime wheel from PyPI
+          # (libmpi + mpiexec), exercising the loadESMF.py libmpi preload path.
+          pip install wheelhouse_repaired/esmpy*.whl
           unset ESMFMKFILE
           python -c "import esmpy; print('esmpy', esmpy.__version__)"
+          # MPI variant: prove real multi-rank ESMF VM parallelism (not mpiuni).
+          # local_pet()/pet_count() are @initialize-decorated, so they bring up
+          # the ESMF VM; under `mpiexec -n 4` a real MPICH build reports 4 PETs
+          # (mpiuni would report 1). mpiexec comes from the `mpich` runtime wheel.
+          if [ "${{ matrix.variant }}" = "mpich" ]; then
+            mpiexec -n 4 python -c "import esmpy; print('PET', esmpy.local_pet(), 'of', esmpy.pet_count())"
+          fi
           # TODO: run esmf/src/addon/esmpy/src/esmpy/test regridding subset
 
       # Windows: validate the win_amd64 wheel under a real python.org CPython (not the
@@ -214,7 +285,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.plat }}
+          name: wheels-${{ matrix.plat }}-${{ matrix.variant }}
           path: wheelhouse_repaired/*.whl
 
   publish-testpypi:

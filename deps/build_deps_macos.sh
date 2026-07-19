@@ -20,6 +20,7 @@ export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
 
 # clang for C; a real gfortran (e.g. from Homebrew) is required for the Fortran deps.
 export CC="${CC:-clang}"
+export CXX="${CXX:-clang++}"   # only the MPICH build (MPI variant) uses this
 export FC="${FC:-gfortran}"
 export CFLAGS="${CFLAGS:-} -fPIC -arch $ARCH"
 export FFLAGS="${FFLAGS:-} -fPIC -fallow-argument-mismatch"
