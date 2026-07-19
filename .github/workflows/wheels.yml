@@ -224,6 +224,42 @@ jobs:
         run: |
           PY="${PYBIN:+$PYBIN/}python3"; PY="${PY:-python3}"
           $PY scripts/stage_esmf.py --install-prefix _esmf_install --dest dist/staged_lib
+          # macOS + MPI variant: retarget libesmf's C libmpi dependency to the runtime
+          # wheel's libmpi *by install name* so the loadESMF.py preload is what dyld
+          # binds to. ESMF links against the source-built libmpi in _deps, which bakes
+          # an ABSOLUTE _deps/lib/libmpi.N.dylib install name into libesmf. Under
+          # macOS's two-level namespace dyld binds to that exact id, so at runtime it
+          # loads the stale source-built libmpi -- present in CI (masking the bug), but
+          # ABSENT on a user's machine -- instead of the PyPI `mpich`/`openmpi` wheel's
+          # libmpi that loadESMF.py preloads. That split (app on the _deps build, the
+          # `mpiexec`/PRRTE launcher on the wheel build) is what segfaults Open MPI at
+          # MPI_Init. The wheel's libmpi ships install id @rpath/libmpi.N.dylib, so
+          # rewriting libesmf's dependency to that exact string makes dyld reuse the
+          # already-preloaded wheel image (matched by install name), keeping app +
+          # launcher on ONE MPI build -- as on Linux, where RTLD_GLOBAL already does
+          # this. delocate leaves the excluded libmpi ref untouched, so fix it here.
+          # (Re-sign ad-hoc: install_name_tool invalidates the arm64 signature;
+          # delocate re-signs later too, but do it now so nothing loads unsigned.)
+          if [ "${{ matrix.kind }}" = "macos" ]; then
+            case "${{ matrix.variant }}" in
+              mpich)   MPI_DYLIB=libmpi.12.dylib ;;
+              openmpi) MPI_DYLIB=libmpi.40.dylib ;;
+              *)       MPI_DYLIB="" ;;
+            esac
+            if [ -n "$MPI_DYLIB" ]; then
+              LIB=dist/staged_lib/libesmf_fullylinked.dylib
+              echo "==> libesmf libmpi ref BEFORE:"; otool -L "$LIB" | grep -i libmpi || true
+              CUR="$(otool -L "$LIB" | awk -v d="$MPI_DYLIB" 'index($1, d) {print $1; exit}')"
+              if [ -n "$CUR" ]; then
+                install_name_tool -change "$CUR" "@rpath/$MPI_DYLIB" "$LIB"
+                codesign --force --sign - "$LIB"
+                echo "==> rewrote libmpi ref: $CUR -> @rpath/$MPI_DYLIB"
+              else
+                echo "==> WARNING: no $MPI_DYLIB dependency found in $LIB"
+              fi
+              echo "==> libesmf libmpi ref AFTER:"; otool -L "$LIB" | grep -i libmpi || true
+            fi
+          fi
           # esmpy*-...any.whl matches both `esmpy-` (serial) and `esmpy_mpich-`
           # (the dist name normalizes the hyphen to an underscore in wheel files);
           # only one exists per run. graft_wheel.py carries the dist name through.
