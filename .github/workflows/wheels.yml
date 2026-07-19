@@ -298,13 +298,17 @@ jobs:
           MPI_RUN="mpiexec -n 4"
           case "${{ matrix.variant }}" in
             openmpi)
-              # Open MPI's launcher is PRRTE, which refuses to run as root -- and the
-              # manylinux container runs as root -- so opt in explicitly. Also allow
-              # oversubscription since the runner may expose fewer than 4 slots.
-              # (macOS runs non-root, but these are harmless there.)
+              # Open MPI's launcher is PRRTE. Two runner-environment quirks to handle:
+              #   - PRRTE refuses to run as root, and the manylinux container is root,
+              #     so opt in via OMPI_ALLOW_RUN_AS_ROOT[_CONFIRM].
+              #   - Runners expose fewer than 4 cores (= PRRTE slots), so -n 4 needs
+              #     oversubscription. Open MPI 5's PRRTE ignores the old v4 MCA param
+              #     OMPI_MCA_rmaps_base_oversubscribe; pass --map-by :OVERSUBSCRIBE on
+              #     the command line instead (what the "not enough slots" error itself
+              #     recommends). Both Linux (root, <4 cores) and macOS (non-root, <4
+              #     cores) need the map-by; only Linux needs the root opt-in.
               export OMPI_ALLOW_RUN_AS_ROOT=1 OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
-              export OMPI_MCA_rmaps_base_oversubscribe=true
-              $MPI_RUN python -c "import esmpy; print('PET', esmpy.local_pet(), 'of', esmpy.pet_count())" ;;
+              mpiexec --map-by :OVERSUBSCRIBE -n 4 python -c "import esmpy; print('PET', esmpy.local_pet(), 'of', esmpy.pet_count())" ;;
             mpich)
               $MPI_RUN python -c "import esmpy; print('PET', esmpy.local_pet(), 'of', esmpy.pet_count())" ;;
           esac

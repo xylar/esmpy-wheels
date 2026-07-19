@@ -103,11 +103,11 @@ targets **single-node** parallelism. Because MPICH honors the
 `mpich` runtime can in principle be pointed at a system MPI (Intel MPI, Cray MPT) — a
 best-effort escape hatch, but genuine multi-node HPC still wants a spack/system build.
 
-> **Open MPI on Linux runs as root in CI.** Open MPI's PRRTE launcher refuses to run as
-> root, which the manylinux container is; the CI smoke test sets
-> `OMPI_ALLOW_RUN_AS_ROOT=1` / `OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1` (plus
-> `OMPI_MCA_rmaps_base_oversubscribe=true`) to allow it. Normal (non-root) use needs
-> none of these.
+> **Open MPI in CI needs two launcher opt-ins.** Open MPI's PRRTE launcher refuses to
+> run as root (the manylinux container is root), so the smoke test sets
+> `OMPI_ALLOW_RUN_AS_ROOT=1` / `OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1`; and because the
+> runners have fewer than 4 cores, `mpiexec -n 4` is launched with
+> `--map-by :OVERSUBSCRIBE`. Normal use on a real machine needs neither.
 
 ## Layout
 
