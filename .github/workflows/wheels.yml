@@ -5,6 +5,9 @@ name: wheels
 #   - variant=serial (mpiuni): Linux + macOS + Windows -> distribution `esmpy`.
 #   - variant=mpich   (ESMF_COMM=mpich):   Linux + macOS -> distribution `esmpy-mpich`.
 #   - variant=openmpi (ESMF_COMM=openmpi): Linux + macOS -> distribution `esmpy-openmpi`.
+# Linux covers both x86_64 and aarch64 (manylinux_2_28 is a glibc baseline, not an
+# arch: each arch needs its own container image *and* a native runner). macOS is
+# arm64 only; Windows is x86_64 only.
 #     Each MPI variant builds its MPI from source (deps/common.sh:build_mpich /
 #     build_openmpi), does NOT vendor libmpi, and depends on the matching PyPI
 #     runtime wheel (`mpich` -> libmpi.so.12, `openmpi` -> libmpi.so.40; each ships
@@ -62,6 +65,15 @@ jobs:
             variant: serial
             container: quay.io/pypa/manylinux_2_28_x86_64
             shell: bash
+          # Native arm64 runner: these are multi-hour source builds, so QEMU
+          # emulation on an x86_64 runner is not a viable alternative.
+          - os: ubuntu-24.04-arm
+            kind: linux
+            arch: aarch64
+            plat: linux_aarch64
+            variant: serial
+            container: quay.io/pypa/manylinux_2_28_aarch64
+            shell: bash
           - os: macos-14
             kind: macos
             arch: arm64
@@ -88,6 +100,14 @@ jobs:
             esmf_comm: mpich
             container: quay.io/pypa/manylinux_2_28_x86_64
             shell: bash
+          - os: ubuntu-24.04-arm
+            kind: linux
+            arch: aarch64
+            plat: linux_aarch64
+            variant: mpich
+            esmf_comm: mpich
+            container: quay.io/pypa/manylinux_2_28_aarch64
+            shell: bash
           - os: macos-14
             kind: macos
             arch: arm64
@@ -109,6 +129,14 @@ jobs:
             variant: openmpi
             esmf_comm: openmpi
             container: quay.io/pypa/manylinux_2_28_x86_64
+            shell: bash
+          - os: ubuntu-24.04-arm
+            kind: linux
+            arch: aarch64
+            plat: linux_aarch64
+            variant: openmpi
+            esmf_comm: openmpi
+            container: quay.io/pypa/manylinux_2_28_aarch64
             shell: bash
           - os: macos-14
             kind: macos
